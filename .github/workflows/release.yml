@@ -46,8 +46,31 @@ jobs:
       - name: Install dependencies
         run: npm install -g semantic-release @semantic-release/git @semantic-release/changelog @semantic-release/github @semantic-release/exec conventional-changelog-conventionalcommits
 
-      - name: Create Release (Automatic)
-        if: github.event_name == 'push' || inputs.release-type == 'auto'
+      - name: Create Manual Release Commit
+        if: github.event_name == 'workflow_dispatch' && inputs.release-type != 'auto'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          case "${{ inputs.release-type }}" in
+            major)
+              git commit --allow-empty -m "chore!: force major release
+
+              BREAKING CHANGE: Manual major version bump requested via workflow dispatch"
+              ;;
+            minor)
+              git commit --allow-empty -m "feat: force minor release
+
+              Manual minor version bump requested via workflow dispatch"
+              ;;
+            patch)
+              git commit --allow-empty -m "fix: force patch release
+
+              Manual patch version bump requested via workflow dispatch"
+              ;;
+          esac
+
+      - name: Create Release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GIT_AUTHOR_NAME: github-actions[bot]
@@ -55,14 +78,3 @@ jobs:
           GIT_COMMITTER_NAME: github-actions[bot]
           GIT_COMMITTER_EMAIL: github-actions[bot]@users.noreply.github.com
         run: npx semantic-release ${{ inputs.dry-run && '--dry-run' || '' }}
-
-      - name: Create Release (Manual Override)
-        if: github.event_name == 'workflow_dispatch' && inputs.release-type != 'auto'
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GIT_AUTHOR_NAME: github-actions[bot]
-          GIT_AUTHOR_EMAIL: github-actions[bot]@users.noreply.github.com
-          GIT_COMMITTER_NAME: github-actions[bot]
-          GIT_COMMITTER_EMAIL: github-actions[bot]@users.noreply.github.com
-          RELEASE_TYPE: ${{ inputs.release-type }}
-        run: npx semantic-release ${{ inputs.dry-run && '--dry-run' || '' }} --branches main --force-release ${{ inputs.release-type }}
