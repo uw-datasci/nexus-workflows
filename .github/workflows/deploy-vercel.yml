@@ -1,0 +1,56 @@
+name: Vercel Deploy
+
+on:
+  workflow_call:
+    inputs:
+      vercel-project-id:
+        required: true
+        type: string
+        description: "The Vercel Project ID (from project.json)"
+      working-directory:
+        required: false
+        type: string
+        default: "."
+      artifact-name:
+        required: false
+        type: string
+        default: dist
+        description: "Name of the build artifact to download"
+    secrets:
+      VERCEL_TOKEN:
+        required: true
+      VERCEL_ORG_ID:
+        required: true
+
+jobs:
+  deploy:
+    name: Deploy to Vercel
+    runs-on: ubuntu-latest
+    environment:
+      name: ${{ github.ref == 'refs/heads/main' && 'Production' || 'Preview' }}
+      url: ${{ steps.deploy.outputs.url }}
+
+    env:
+      VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+      VERCEL_PROJECT_ID: ${{ inputs.vercel-project-id }}
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Download Build Artifact
+        uses: actions/download-artifact@v7
+        with:
+          name: ${{ inputs.artifact-name }}
+          path: ${{ inputs.working-directory }}/dist
+
+      - name: Install Vercel CLI
+        run: npm install --global vercel@latest
+
+      - name: Deploy Build Artifacts to Vercel
+        id: deploy
+        run: |
+          # Deploy the built files directly to Vercel
+          URL=$(vercel deploy ./dist ${{ github.ref == 'refs/heads/main' && '--prod' || '' }} --token=${{ secrets.VERCEL_TOKEN }})
+          echo "url=$URL" >> $GITHUB_OUTPUT
+        working-directory: ${{ inputs.working-directory }}

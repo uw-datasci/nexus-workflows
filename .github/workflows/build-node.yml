@@ -1,0 +1,79 @@
+name: Node Build
+
+on:
+  workflow_call:
+    inputs:
+      node-version:
+        required: false
+        type: number
+        default: 20
+      working-directory:
+        required: false
+        type: string
+        default: "."
+        description: Folder to run commands in (useful for monorepos)
+      build-command:
+        required: false
+        type: string
+        default: pnpm build
+      artifact-name:
+        required: false
+        type: string
+        default: dist
+      path-name:
+        required: false
+        type: string
+        default: .next
+        description: Path to the build output
+      infisical-project-slug:
+        required: true
+        type: string
+        description: "The Infisical project slug"
+      infisical-secret-path:
+        required: false
+        type: string
+        default: "/"
+        description: "The path to secrets in Infisical"
+    secrets:
+      INFISICAL_CLIENT_ID:
+        required: true
+      INFISICAL_CLIENT_SECRET:
+        required: true
+
+jobs:
+  build:
+    name: Build Node App
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v6
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: pnpm
+
+      - name: Install Dependencies
+        run: pnpm install --frozen-lockfile
+        working-directory: ${{ inputs.working-directory }}
+
+      - name: Pull Secrets from Infisical
+        uses: infisical/secrets-action@v1
+        with:
+          env-slug: ${{ github.ref == 'refs/heads/main' && 'prod' || 'dev' }}
+          client-id: ${{ secrets.INFISICAL_CLIENT_ID }}
+          client-secret: ${{ secrets.INFISICAL_CLIENT_SECRET }}
+          project-slug: ${{ inputs.infisical-project-slug }}
+          secret-path: ${{ inputs.infisical-secret-path }}
+
+      - name: Build
+        run: ${{ inputs.build-command }}
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v5
+        with:
+          name: ${{ inputs.artifact-name }}
+          path: ${{ inputs.working-directory }}/${{ inputs.path-name }}
+          retention-days: 1
