@@ -78,3 +78,28 @@ jobs:
           GIT_COMMITTER_NAME: github-actions[bot]
           GIT_COMMITTER_EMAIL: github-actions[bot]@users.noreply.github.com
         run: npx semantic-release ${{ inputs.dry-run && '--dry-run' || '' }}
+
+      - name: Update Major Version Tag
+        if: ${{ !inputs.dry-run }}
+        run: |
+          # Get the latest tag created by semantic-release
+          LATEST_TAG=$(git describe --tags --abbrev=0)
+          echo "Latest tag: $LATEST_TAG"
+
+          # Extract major version (e.g., v1.2.3 -> v1)
+          if [[ $LATEST_TAG =~ ^v([0-9]+) ]]; then
+            MAJOR_VERSION="v${BASH_REMATCH[1]}"
+            echo "Major version: $MAJOR_VERSION"
+            
+            # Delete the major version tag if it exists (locally and remotely)
+            git tag -d "$MAJOR_VERSION" 2>/dev/null || true
+            git push origin ":refs/tags/$MAJOR_VERSION" 2>/dev/null || true
+            
+            # Create new major version tag pointing to the latest release
+            git tag -a "$MAJOR_VERSION" -m "Update $MAJOR_VERSION to $LATEST_TAG"
+            git push origin "$MAJOR_VERSION"
+            
+            echo "✅ Updated $MAJOR_VERSION to point to $LATEST_TAG"
+          else
+            echo "⚠️ Could not extract major version from $LATEST_TAG"
+          fi
