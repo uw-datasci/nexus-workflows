@@ -62,7 +62,7 @@ jobs:
         working-directory: ${{ inputs.working-directory }}
 
       - name: Pull Secrets from Infisical
-        uses: infisical/secrets-action@v1
+        uses: infisical/secrets-action@v1.0.9
         with:
           env-slug: ${{ github.ref == 'refs/heads/main' && 'prod' || 'dev' }}
           client-id: ${{ secrets.INFISICAL_CLIENT_ID }}
