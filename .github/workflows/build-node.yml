@@ -4,9 +4,11 @@ on:
   workflow_call:
     inputs:
       node-version:
-        required: false
+        required: true
         type: number
-        default: 20
+      pnpm-version:
+        required: true
+        type: number
       working-directory:
         required: false
         type: string
@@ -49,7 +51,7 @@ jobs:
 
       - uses: pnpm/action-setup@v4
         with:
-          version: 10
+          version: ${{ inputs.pnpm-version }}
       - uses: actions/setup-node@v6
         with:
           node-version: ${{ inputs.node-version }}
