@@ -77,6 +77,7 @@ jobs:
           client-secret: ${{ secrets.INFISICAL_CLIENT_SECRET }}
           project-slug: ${{ inputs.infisical-project-slug }}
           secret-path: ${{ inputs.infisical-secret-path }}
+          export-type: file
 
       - name: Pull Vercel Config
         run: vercel pull --yes --environment=${{ inputs.is-prod && 'production' || 'preview' }} --token=$VERCEL_TOKEN
