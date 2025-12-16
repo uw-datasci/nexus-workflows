@@ -9,6 +9,10 @@ on:
       pnpm-version:
         required: true
         type: string
+      environment:
+        required: true
+        type: string
+        description: "The deployment environment: 'prod' or 'stage'"
       infisical-project-slug:
         required: true
         type: string
@@ -62,17 +66,17 @@ jobs:
       - name: Pull Secrets from Infisical
         uses: infisical/secrets-action@v1.0.9
         with:
-          env-slug: ${{ github.ref == 'refs/heads/main' && 'prod' || 'dev' }}
+          env-slug: ${{ inputs.environment == 'prod' && 'prod' || 'dev' }}
           client-id: ${{ secrets.INFISICAL_CLIENT_ID }}
           client-secret: ${{ secrets.INFISICAL_CLIENT_SECRET }}
           project-slug: ${{ inputs.infisical-project-slug }}
           secret-path: ${{ inputs.infisical-secret-path }}
 
       - name: Pull Vercel Config
-        run: vercel pull --yes --environment=production --token=$VERCEL_TOKEN
+        run: vercel pull --yes --environment=${{ inputs.environment == 'prod' && 'production' || 'preview' }} --token=$VERCEL_TOKEN
 
       - name: Build Artifact
-        run: vercel build --prod --token=$VERCEL_TOKEN
+        run: vercel build ${{ inputs.environment == 'prod' && '--prod' || '' }} --token=$VERCEL_TOKEN
 
       - name: Deploy to Vercel
-        run: vercel deploy --prebuilt --prod --archive=tgz --token=$VERCEL_TOKEN
+        run: vercel deploy --prebuilt ${{ inputs.environment == 'prod' && '--prod' || '' }} --archive=tgz --token=$VERCEL_TOKEN
