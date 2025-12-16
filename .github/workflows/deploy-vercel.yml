@@ -9,10 +9,10 @@ on:
       pnpm-version:
         required: true
         type: string
-      environment:
+      is-prod:
         required: true
-        type: string
-        description: "The deployment environment: 'prod' or 'stage'"
+        type: boolean
+        description: "True for prod, false for staging"
       infisical-project-slug:
         required: true
         type: string
@@ -21,6 +21,10 @@ on:
         required: true
         type: string
         description: "The path to secrets in Infisical"
+    outputs:
+      deployment-url:
+        description: "The URL of the deployed application"
+        value: ${{ jobs.deploy.outputs.deployment-url }}
     secrets:
       INFISICAL_CLIENT_ID:
         required: true
@@ -42,6 +46,8 @@ jobs:
   deploy:
     name: Deploy to Vercel
     runs-on: ubuntu-latest
+    outputs:
+      deployment-url: ${{ steps.deploy.outputs.url }}
     steps:
       - name: Checkout Repo
         uses: actions/checkout@v6
@@ -66,17 +72,20 @@ jobs:
       - name: Pull Secrets from Infisical
         uses: infisical/secrets-action@v1.0.9
         with:
-          env-slug: ${{ inputs.environment == 'prod' && 'prod' || 'dev' }}
+          env-slug: ${{ inputs.is-prod && 'prod' || 'dev' }}
           client-id: ${{ secrets.INFISICAL_CLIENT_ID }}
           client-secret: ${{ secrets.INFISICAL_CLIENT_SECRET }}
           project-slug: ${{ inputs.infisical-project-slug }}
           secret-path: ${{ inputs.infisical-secret-path }}
 
       - name: Pull Vercel Config
-        run: vercel pull --yes --environment=${{ inputs.environment == 'prod' && 'production' || 'preview' }} --token=$VERCEL_TOKEN
+        run: vercel pull --yes --environment=${{ inputs.is-prod && 'production' || 'preview' }} --token=$VERCEL_TOKEN
 
       - name: Build Artifact
-        run: vercel build ${{ inputs.environment == 'prod' && '--prod' || '' }} --token=$VERCEL_TOKEN
+        run: vercel build ${{ inputs.is-prod && '--prod' || '' }} --token=$VERCEL_TOKEN
 
       - name: Deploy to Vercel
-        run: vercel deploy --prebuilt ${{ inputs.environment == 'prod' && '--prod' || '' }} --archive=tgz --token=$VERCEL_TOKEN
+        id: deploy
+        run: |
+          DEPLOYMENT_URL=$(vercel deploy --prebuilt ${{ inputs.is-prod && '--prod' || '' }} --archive=tgz --token=$VERCEL_TOKEN)
+          echo "url=$DEPLOYMENT_URL" >> $GITHUB_OUTPUT
