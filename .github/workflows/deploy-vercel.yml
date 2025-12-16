@@ -69,6 +69,9 @@ jobs:
       - name: Install Vercel CLI
         run: pnpm install -g vercel@latest
 
+      - name: Pull Vercel Config
+        run: vercel pull --yes --environment=${{ inputs.is-prod && 'production' || 'preview' }} --token=$VERCEL_TOKEN
+
       - name: Pull Secrets from Infisical
         uses: infisical/secrets-action@v1.0.9
         with:
@@ -77,10 +80,6 @@ jobs:
           client-secret: ${{ secrets.INFISICAL_CLIENT_SECRET }}
           project-slug: ${{ inputs.infisical-project-slug }}
           secret-path: ${{ inputs.infisical-secret-path }}
-          export-type: file
-
-      - name: Pull Vercel Config
-        run: vercel pull --yes --environment=${{ inputs.is-prod && 'production' || 'preview' }} --token=$VERCEL_TOKEN
 
       - name: Build Artifact
         run: vercel build ${{ inputs.is-prod && '--prod' || '' }} --token=$VERCEL_TOKEN
