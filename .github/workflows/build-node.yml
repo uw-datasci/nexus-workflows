@@ -12,12 +12,7 @@ on:
       build-command:
         required: true
         type: string
-        description: Build command to execute (e.g., 'pnpm build' or 'vercel build --prod')
-      build-to-vercel:
-        required: false
-        type: boolean
-        default: false
-        description: Whether to install Vercel CLI before building
+        description: Build command to execute (e.g., 'pnpm build')
       infisical-project-slug:
         required: true
         type: string
