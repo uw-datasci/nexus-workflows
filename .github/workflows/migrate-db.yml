@@ -48,13 +48,7 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Pull Secrets from Infisical
-        uses: infisical/secrets-action@v1.0.9
-        with:
-          env-slug: ${{ github.ref == 'refs/heads/main' && 'prod' || 'dev' }}
-          client-id: ${{ secrets.INFISICAL_CLIENT_ID }}
-          client-secret: ${{ secrets.INFISICAL_CLIENT_SECRET }}
-          project-slug: ${{ inputs.infisical-project-slug }}
-          secret-path: ${{ inputs.infisical-secret-path }}
+        run: pnpm pull-secrets
 
       - name: Run migrations
         env:
