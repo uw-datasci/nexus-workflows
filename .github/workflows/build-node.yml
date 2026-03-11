@@ -27,11 +27,18 @@ on:
         required: true
       INFISICAL_CLIENT_SECRET:
         required: true
+      TURBO_TEAM:
+        required: false
+      TURBO_TOKEN:
+        required: false
 
 jobs:
   build:
     name: Build App
     runs-on: ubuntu-latest
+    env:
+          TURBO_TEAM: ${{ secrets.TURBO_TEAM }}
+          TURBO_TOKEN: ${{ secrets.TURBO_TOKEN }}
     steps:
       - name: Checkout Repo
         uses: actions/checkout@v6
