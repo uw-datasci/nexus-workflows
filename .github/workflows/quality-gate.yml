@@ -9,6 +9,15 @@ on:
       pnpm-version:
         required: true
         type: string
+      infisical-project-slug:
+        required: true
+        type: string
+        description: "The Infisical project slug"
+      infisical-secret-path:
+        required: false
+        type: string
+        default: "/"
+        description: "The path to secrets in Infisical"
       lint-command:
         required: false
         type: string
@@ -17,6 +26,11 @@ on:
         required: false
         type: string
         default: pnpm check-types
+    secrets:
+      INFISICAL_CLIENT_ID:
+        required: true
+      INFISICAL_CLIENT_SECRET:
+        required: true
 
 jobs:
   code-quality:
@@ -40,6 +54,15 @@ jobs:
 
       - name: Install Dependencies
         run: pnpm install --frozen-lockfile
+      
+      - name: Pull Secrets from Infisical
+        uses: infisical/secrets-action@v1.0.9
+        with:
+          env-slug: ${{ github.ref == 'refs/heads/main' && 'prod' || 'staging' }}
+          client-id: ${{ secrets.INFISICAL_CLIENT_ID }}
+          client-secret: ${{ secrets.INFISICAL_CLIENT_SECRET }}
+          project-slug: ${{ inputs.infisical-project-slug }}
+          secret-path: ${{ inputs.infisical-secret-path }}
 
       - name: Run Lint
         run: ${{ inputs.lint-command }}
