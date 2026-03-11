@@ -53,7 +53,7 @@ jobs:
       - name: Pull Secrets from Infisical
         uses: infisical/secrets-action@v1.0.9
         with:
-          env-slug: ${{ github.ref == 'refs/heads/main' && 'prod' || 'dev' }}
+          env-slug: ${{ github.ref == 'refs/heads/main' && 'prod' || 'staging' }}
           client-id: ${{ secrets.INFISICAL_CLIENT_ID }}
           client-secret: ${{ secrets.INFISICAL_CLIENT_SECRET }}
           project-slug: ${{ inputs.infisical-project-slug }}
