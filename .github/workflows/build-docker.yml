@@ -1,0 +1,125 @@
+name: Build Docker Image
+
+on:
+  workflow_call:
+    inputs:
+      node-version:
+        description: Node.js version for setup-node
+        required: true
+        type: string
+      pnpm-version:
+        description: pnpm version for pnpm/action-setup
+        required: true
+        type: string
+      infisical-project-slug:
+        description: Infisical project slug
+        required: true
+        type: string
+      infisical-secret-path:
+        description: Infisical secret path (e.g. /api)
+        required: false
+        type: string
+        default: "/"
+      dockerfile:
+        description: Path to Dockerfile relative to the repository root
+        required: false
+        type: string
+        default: docker/Dockerfile
+      docker-context:
+        description: Docker build context (repository root is ".")
+        required: false
+        type: string
+        default: "."
+      image-name:
+        description: >
+          Image path under ghcr.io (e.g. owner/repo/service). If empty, uses the lowercase
+          GITHUB_REPOSITORY value.
+        required: false
+        type: string
+        default: ""
+      image-tag:
+        description: Tag applied when pushing the image (e.g. latest or a commit SHA)
+        required: false
+        type: string
+        default: latest
+    secrets:
+      INFISICAL_CLIENT_ID:
+        description: Infisical universal auth client id
+        required: true
+      INFISICAL_CLIENT_SECRET:
+        description: Infisical universal auth client secret
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    env:
+      REGISTRY: ghcr.io
+
+    outputs:
+      image: ${{ steps.image-ref.outputs.image_tag }}
+
+    steps:
+      - name: Checkout Repo
+        uses: actions/checkout@v6
+
+      - name: Resolve container image name
+        id: image
+        run: |
+          if [ -n "${{ inputs.image-name }}" ]; then
+            echo "name=${{ inputs.image-name }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "name=${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Compose image reference
+        id: image-ref
+        run: |
+          echo "image_tag=${{ format('{0}/{1}:{2}', env.REGISTRY, steps.image.outputs.name, inputs.image-tag) }}" >> "$GITHUB_OUTPUT"
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: ${{ inputs.pnpm-version }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: pnpm
+
+      - name: Install Dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Pull Secrets from Infisical
+        uses: infisical/secrets-action@v1.0.9
+        with:
+          env-slug: ${{ github.ref == 'refs/heads/main' && 'prod' || 'staging' }}
+          client-id: ${{ secrets.INFISICAL_CLIENT_ID }}
+          client-secret: ${{ secrets.INFISICAL_CLIENT_SECRET }}
+          project-slug: ${{ inputs.infisical-project-slug }}
+          secret-path: ${{ inputs.infisical-secret-path }}
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v7
+        with:
+          context: ${{ inputs.docker-context }}
+          file: ${{ inputs.dockerfile }}
+          push: true
+          tags: ${{ steps.image-ref.outputs.image_tag }}

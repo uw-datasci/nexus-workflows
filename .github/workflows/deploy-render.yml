@@ -1,0 +1,64 @@
+name: Render Deploy
+
+on:
+  workflow_call:
+    inputs:
+      ref:
+        required: false
+        type: string
+        default: ""
+        description: >
+          Git ref to deploy (branch, tag, or commit SHA). For private repositories, the action needs
+          github_token with contents read (this workflow passes GITHUB_TOKEN automatically).
+      service-label:
+        required: false
+        type: string
+        default: "Render"
+        description: Short label for the job name (e.g. production API).
+      clear-cache:
+        required: false
+        type: boolean
+        default: false
+        description: Clear Render build cache before deploying.
+      wait-deploy:
+        required: false
+        type: boolean
+        default: false
+        description: Wait until the Render deployment finishes before the job completes.
+      github-deployment:
+        required: false
+        type: boolean
+        default: false
+        description: Create a GitHub Deployment (Environments). Requires deployments write permission on the job.
+      deployment-environment:
+        required: false
+        type: string
+        default: production
+        description: Environment name when github-deployment is true.
+    secrets:
+      RENDER_SERVICE_ID:
+        required: true
+        description: Render service ID from the service page in the dashboard.
+      RENDER_API_KEY:
+        required: true
+        description: Render API key from Account Settings, API Keys.
+
+jobs:
+  deploy:
+    name: Deploy to ${{ inputs.service-label }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      deployments: write
+    steps:
+      - name: Deploy to Render
+        uses: JorgeLNJunior/render-deploy@v1.5.0
+        with:
+          service_id: ${{ secrets.RENDER_SERVICE_ID }}
+          api_key: ${{ secrets.RENDER_API_KEY }}
+          clear_cache: ${{ inputs.clear-cache }}
+          wait_deploy: ${{ inputs.wait-deploy }}
+          github_deployment: ${{ inputs.github-deployment }}
+          deployment_environment: ${{ inputs.deployment-environment }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          ref: ${{ inputs.ref }}
