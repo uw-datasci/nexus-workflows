@@ -84,7 +84,7 @@ jobs:
           echo "image_tag=${{ format('{0}/{1}:{2}', env.REGISTRY, steps.image.outputs.name, inputs.image-tag) }}" >> "$GITHUB_OUTPUT"
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v6
         with:
           version: ${{ inputs.pnpm-version }}
 
