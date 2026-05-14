@@ -98,7 +98,7 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Pull Secrets from Infisical
-        uses: infisical/secrets-action@v1.0.9
+        uses: infisical/secrets-action@v1.0.16
         with:
           env-slug: ${{ github.ref == 'refs/heads/main' && 'prod' || 'staging' }}
           client-id: ${{ secrets.INFISICAL_CLIENT_ID }}

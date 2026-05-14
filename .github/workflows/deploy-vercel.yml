@@ -73,7 +73,7 @@ jobs:
         run: vercel pull --yes --environment=${{ inputs.is-prod && 'production' || 'preview' }} --token=$VERCEL_TOKEN
 
       - name: Pull Secrets from Infisical
-        uses: infisical/secrets-action@v1.0.9
+        uses: infisical/secrets-action@v1.0.16
         with:
           env-slug: ${{ inputs.is-prod && 'prod' || 'dev' }}
           client-id: ${{ secrets.INFISICAL_CLIENT_ID }}
