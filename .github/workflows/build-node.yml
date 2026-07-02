@@ -36,6 +36,9 @@ jobs:
   build:
     name: Build App
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
     env:
       TURBO_TEAM: ${{ secrets.TURBO_TEAM }}
       TURBO_TOKEN: ${{ secrets.TURBO_TOKEN }}
@@ -53,9 +56,13 @@ jobs:
         with:
           node-version: ${{ inputs.node-version }}
           cache: pnpm
+          registry-url: https://npm.pkg.github.com
+          scope: "@uw-datasci"
 
       - name: Install Dependencies
         run: pnpm install --frozen-lockfile
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Pull Secrets from Infisical
         uses: infisical/secrets-action@v1.0.16

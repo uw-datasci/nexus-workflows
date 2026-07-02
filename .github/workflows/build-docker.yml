@@ -52,6 +52,7 @@ on:
 
 permissions:
   contents: read
+  packages: read
 
 jobs:
   build:
@@ -93,9 +94,13 @@ jobs:
         with:
           node-version: ${{ inputs.node-version }}
           cache: pnpm
+          registry-url: https://npm.pkg.github.com
+          scope: "@uw-datasci"
 
       - name: Install Dependencies
         run: pnpm install --frozen-lockfile
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Pull Secrets from Infisical
         uses: infisical/secrets-action@v1.0.16
@@ -123,3 +128,5 @@ jobs:
           file: ${{ inputs.dockerfile }}
           push: true
           tags: ${{ steps.image-ref.outputs.image_tag }}
+          secrets: |
+            NODE_AUTH_TOKEN=${{ secrets.GITHUB_TOKEN }}
