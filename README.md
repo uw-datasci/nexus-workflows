@@ -8,6 +8,7 @@ Reusable GitHub Actions workflows for the Data Science Club.
 - **Vercel Deploy** - Deploy to Vercel
 - **Quality Gate** - Lint and typecheck
 - **Quality Sonar** - SonarQube analysis
+- **Dispatch Docs Update** - Notify the docs app (nexus-docs) when a PR merges so the changelog gets updated
 
 ## Release Automation
 
