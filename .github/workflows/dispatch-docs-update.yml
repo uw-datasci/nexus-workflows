@@ -37,16 +37,6 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Extract Semester Tag
-        id: semester
-        env:
-          PR_LABELS: ${{ join(github.event.pull_request.labels.*.name, ' ') }}
-        run: |
-          # Extract semester tags from PR labels (F25, W26, S26, F26, W27, etc.)
-          SEMESTER_TAG=$(echo "$PR_LABELS" | grep -oE '(F|W|S)[0-9]{2}' | head -1 || echo "")
-          echo "semester_tag=$SEMESTER_TAG" >> $GITHUB_OUTPUT
-          echo "Found semester tag: $SEMESTER_TAG"
-
       - name: Send repository_dispatch to Docs Repo
         env:
           GH_TOKEN: ${{ secrets.DOCS_DISPATCH_TOKEN }}
@@ -56,7 +46,9 @@ jobs:
           PR_TITLE: ${{ github.event.pull_request.title }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha }}
-          SEMESTER_TAG: ${{ steps.semester.outputs.semester_tag }}
+          # The docs repo resolves the semester itself from the website's terms table.
+          # All this decides is which of its two paths runs.
+          DOCS_MODE: ${{ contains(github.event.pull_request.labels.*.name, 'general docs') && 'general' || 'changelog' }}
         run: |
           gh api "repos/${DOCS_REPO}/dispatches" \
             -f event_type=update-docs \
@@ -66,5 +58,5 @@ jobs:
             -f "client_payload[pr_number]=${PR_NUMBER}" \
             -f "client_payload[pr_title]=${PR_TITLE}" \
             -f "client_payload[merge_sha]=${MERGE_SHA}" \
-            -f "client_payload[semester_tag]=${SEMESTER_TAG}"
-          echo "Dispatched update-docs to ${DOCS_REPO} for PR #${PR_NUMBER} (${MERGE_SHA})"
+            -f "client_payload[docs_mode]=${DOCS_MODE}"
+          echo "Dispatched update-docs (${DOCS_MODE}) to ${DOCS_REPO} for PR #${PR_NUMBER} (${MERGE_SHA})"
