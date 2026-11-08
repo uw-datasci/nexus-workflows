@@ -11,6 +11,7 @@ Reusable GitHub Actions workflows for the Data Science Club.
 - **Dispatch Docs Update** - Notify the docs app (nexus-docs) when a PR merges so the changelog gets updated
 - **Feedback Triage** - Route feedback issues to Claude (`route:agent`) or a developer (`route:dev`). See [Feedback loop](#feedback-loop)
 - **Feedback Fix** - Have Claude fix `route:agent` issues and open a PR for review. See [Feedback Fix](#feedback-fix)
+- **Claude Mention** - `@claude` on a feedback PR asks Claude for a change. See [Claude Mention](#claude-mention)
 
 ## Feedback loop
 
@@ -109,7 +110,7 @@ jobs:
 The model never runs in a job that holds a write token:
 
 1. **Gate.** Decides what to do from the event (table below). The config is always read from the default branch.
-2. **Agent.** Waits its turn, installs dependencies, and runs Claude (`claude-sonnet-5-5`, 40 turns, 20 minutes). It can edit files and run the lint and typecheck commands, nothing else. Its token can't push. What it changed is uploaded as a patch.
+2. **Queue, then agent.** Waits its turn in the repo's queue, then installs dependencies and runs Claude (`claude-sonnet-5-5`, 40 turns, 20 minutes). It can edit files and run the lint and typecheck commands, nothing else. Its token can't push. What it changed is uploaded as a patch.
 3. **Publish.** With the `nexus-feedback` App token and no model, it applies the patch and checks the guardrail. Only then does it commit, push and open or update the PR. App-token pushes start the app's quality gate on the PR.
 4. **Hand off.** If anything went wrong, it assigns a developer (same rules as triage), comments why, and swaps `route:agent` for `route:dev`.
 
@@ -135,7 +136,7 @@ The same check is in `scripts/feedback/guardrail.js` for the `@claude` workflow.
 - **Reviewer:** the `lead` is requested, and CODEOWNERS applies as usual.
 - **Closing:** GitHub only closes issues on merges into the default branch, so a PR into `dev` won't close its issue.
 
-**One agent at a time.** Each repo runs one agent at a time and drops none. A GitHub concurrency group keeps only one pending run, so it isn't used here. Instead, the agent job waits until every older run of the queue workflows has finished: the caller's own workflow, plus `queue-workflows`. Per issue, a concurrency group cancels the old run when the labels flip.
+**One agent at a time.** Each repo runs one agent at a time and drops none. A GitHub concurrency group keeps only one pending run, so it isn't used here. Instead, a `queue` job waits until every older run of the queue workflows has finished: the caller's own workflow, plus `queue-workflows`. List the `@claude` caller there, and list this caller in its `queue-workflows`, so the two never work on a branch at the same time. Per issue, a concurrency group cancels the old run when the labels flip.
 
 **Inputs**
 
@@ -176,12 +177,73 @@ jobs:
       packages: read    # pnpm install from GitHub Packages
     with:
       infisical-project-slug: uwdsc-54e-y
+      queue-workflows: claude.yml   # the @claude caller shares the queue
     secrets:
       INFISICAL_CLIENT_ID: ${{ secrets.INFISICAL_CLIENT_ID }}
       INFISICAL_CLIENT_SECRET: ${{ secrets.INFISICAL_CLIENT_SECRET }}
 ```
 
-The scripts behind both workflows live in `scripts/feedback/`, and their tests run with `node --test 'scripts/**/*.test.js'`.
+### Claude Mention
+
+`.github/workflows/claude-mention.yml` lets reviewers iterate on a feedback PR by commenting `@claude` instead of fixing things by hand. From F2, the `nexus-feedback` App posts these comments for organizers' "Still not right" replies in Discord. Claude makes the requested change on the PR's branch, or answers the question, and the workflow replies on the PR.
+
+**What counts**
+
+- **The comment:**
+  - a new PR comment, review comment or review that mentions `@claude` as a whole word
+  - on an open PR from a `feedback/*` branch in the same repo
+- **The author:**
+  - a person with write access
+  - a bot listed in `allowed-bots` (default `nexus-feedback[bot]`)
+- **Anything else** does nothing, with no reply.
+
+**What happens**
+
+1. **Acknowledge.** The comment gets a 👀 reaction. Reviews can't take reactions, so they get none.
+2. **Wait.** The run waits its turn in the same repo queue as the fix workflow.
+3. **Run Claude.** Claude starts from the latest commit on the branch, with the same model setup and the same tools as the fix workflow (30 turns, 15 minutes). It reads:
+   - the comment
+   - the PR and its recent conversation
+   - the feedback issue and its screenshots
+   - the code
+4. **Push and reply.** The same guardrail runs on the whole branch against its base. If it passes, the change is pushed as the App and the reply says what changed. If not, **nothing is pushed** and the reply says why. Questions get an answer and no commit.
+   - **Where:** review comments are answered in their thread. Anything else gets a PR comment.
+   - **No pings:** replies never ping anyone and can't start another run.
+   - **Retry budget:** a push resets the fix workflow's quality-gate retry, so each requested change gets one automatic retry if the quality gate fails.
+
+If `agent.enabled` is false, the workflow only replies that the agent is turned off.
+
+**Inputs:** the same as Feedback Fix, except `max-turns` (`30`) and `timeout-minutes` (`15`). Nothing is handed off: a failed run just replies.
+
+**Caller example**
+
+```yaml
+on:
+  issue_comment:
+    types: [created]
+  pull_request_review_comment:
+    types: [created]
+  pull_request_review:
+    types: [submitted]
+
+jobs:
+  claude:
+    uses: uw-datasci/nexus-workflows/.github/workflows/claude-mention.yml@v4
+    permissions:
+      contents: read
+      issues: read
+      pull-requests: read
+      actions: read
+      packages: read
+    with:
+      infisical-project-slug: uwdsc-54e-y
+      queue-workflows: feedback-fix.yml
+    secrets:
+      INFISICAL_CLIENT_ID: ${{ secrets.INFISICAL_CLIENT_ID }}
+      INFISICAL_CLIENT_SECRET: ${{ secrets.INFISICAL_CLIENT_SECRET }}
+```
+
+The scripts behind all three workflows live in `scripts/feedback/`, and their tests run with `node --test 'scripts/**/*.test.js'`.
 
 ## Release Automation
 

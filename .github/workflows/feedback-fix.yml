@@ -8,7 +8,8 @@ name: Feedback Fix
 # The model never runs in a job that holds a write token:
 # - gate:    read-only GITHUB_TOKEN. Decides what to do (fix, retry, handoff, takeover, stop, skip).
 # - stop:    occupies the issue's concurrency group, which cancels a running agent.
-# - agent:   read-only GITHUB_TOKEN + the Anthropic key. Waits its turn, runs Claude, uploads a patch.
+# - queue:   waits until no older agent run in the repo is still going (see scripts/feedback/queue.js).
+# - agent:   read-only GITHUB_TOKEN + the Anthropic key. Runs Claude and uploads a patch.
 # - publish: the nexus-feedback App token, no model. Guardrail, then commit, push and PR.
 # - handoff: the App token, no model. Assigns a developer and swaps route:agent for route:dev.
 
@@ -115,11 +116,11 @@ jobs:
       failed-run-id: ${{ steps.gate.outputs.failed-run-id }}
       config: ${{ steps.gate.outputs.config }}
     steps:
-      # The default branch, for both issue and workflow_run events, so the config never comes
-      # from a branch the agent wrote.
+      # Always the default branch, so the config never comes from a branch the agent wrote.
       - name: Checkout repo
         uses: actions/checkout@v6
         with:
+          ref: ${{ github.event.repository.default_branch }}
           persist-credentials: false
 
       - name: Checkout feedback scripts
@@ -168,14 +169,50 @@ jobs:
         run: |
           echo "Stopped any agent run for issue $ISSUE_NUMBER."
 
-  agent:
-    name: Agent (#${{ needs.gate.outputs.issue-number }})
+  # Its own job, so the agent job checks out the branch only once it's this run's turn (an
+  # earlier @claude run may have pushed to it in the meantime).
+  queue:
+    name: Queue (#${{ needs.gate.outputs.issue-number }})
     needs: gate
     if: needs.gate.outputs.mode == 'fix' || needs.gate.outputs.mode == 'retry'
     runs-on: ubuntu-latest
-    # Covers the queue wait (queue-timeout-minutes), install and the agent. The queue step and the
-    # agent step have their own limits; this is only a backstop.
     timeout-minutes: 240
+    permissions:
+      contents: read
+      actions: read
+    concurrency:
+      group: feedback-fix-${{ github.repository }}-${{ needs.gate.outputs.issue-number }}
+      cancel-in-progress: true
+    outputs:
+      ready: ${{ steps.queue.outputs.ready }}
+      reason: ${{ steps.queue.outputs.reason }}
+    steps:
+      - name: Checkout feedback scripts
+        uses: actions/checkout@v6
+        with:
+          repository: uw-datasci/nexus-workflows
+          ref: ${{ inputs.workflows-ref }}
+          path: .nexus-workflows
+          persist-credentials: false
+
+      - name: Wait for other agent runs
+        id: queue
+        uses: actions/github-script@v9
+        env:
+          QUEUE_WORKFLOWS: ${{ inputs.queue-workflows }}
+          QUEUE_TIMEOUT_MINUTES: ${{ inputs.queue-timeout-minutes }}
+        with:
+          script: |
+            const { stepWait } = require(`${process.env.GITHUB_WORKSPACE}/.nexus-workflows/scripts/feedback/agent-run.js`);
+            await stepWait({ github, context, core });
+
+  agent:
+    name: Agent (#${{ needs.gate.outputs.issue-number }})
+    needs: [gate, queue]
+    if: needs.queue.outputs.ready == 'true'
+    runs-on: ubuntu-latest
+    # Install + agent. The agent step has its own limit; this is only a backstop.
+    timeout-minutes: 60
     permissions:
       contents: read
       issues: read
@@ -186,7 +223,7 @@ jobs:
       group: feedback-fix-${{ github.repository }}-${{ needs.gate.outputs.issue-number }}
       cancel-in-progress: true
     outputs:
-      handoff-reason: ${{ steps.queue.outputs.handoff-reason || steps.result.outputs.handoff-reason }}
+      handoff-reason: ${{ steps.result.outputs.handoff-reason }}
       has-patch: ${{ steps.result.outputs.has-patch }}
       start-sha: ${{ steps.start.outputs.sha }}
       changes: ${{ steps.result.outputs.changes }}
@@ -211,26 +248,13 @@ jobs:
           path: .nexus-workflows
           persist-credentials: false
 
-      - name: Wait for other agent runs
-        id: queue
-        uses: actions/github-script@v9
-        env:
-          QUEUE_WORKFLOWS: ${{ inputs.queue-workflows }}
-          QUEUE_TIMEOUT_MINUTES: ${{ inputs.queue-timeout-minutes }}
-        with:
-          script: |
-            const { stepWait } = require(`${process.env.GITHUB_WORKSPACE}/.nexus-workflows/scripts/feedback/fix.js`);
-            await stepWait({ github, context, core });
-
       - name: Setup pnpm
-        if: steps.queue.outputs.ready == 'true'
         uses: pnpm/action-setup@v6
         with:
           version: ${{ inputs.pnpm-version }}
           run_install: false
 
       - name: Setup Node.js
-        if: steps.queue.outputs.ready == 'true'
         uses: actions/setup-node@v6
         with:
           node-version: ${{ inputs.node-version }}
@@ -239,7 +263,6 @@ jobs:
           scope: "@uw-datasci"
 
       - name: Install dependencies
-        if: steps.queue.outputs.ready == 'true'
         timeout-minutes: 15
         run: ${{ inputs.install-command }}
         env:
@@ -247,7 +270,6 @@ jobs:
 
       - name: Collect issue context
         id: prepare
-        if: steps.queue.outputs.ready == 'true'
         uses: actions/github-script@v9
         env:
           MODE: ${{ needs.gate.outputs.mode }}
@@ -267,7 +289,6 @@ jobs:
 
       # Exported to a file, not the environment, so this job only ever holds the Anthropic key.
       - name: Pull secrets from Infisical
-        if: steps.queue.outputs.ready == 'true'
         uses: infisical/secrets-action@v1.0.16
         with:
           env-slug: ${{ inputs.infisical-env-slug }}
@@ -280,7 +301,6 @@ jobs:
 
       - name: Read Anthropic key
         id: secrets
-        if: steps.queue.outputs.ready == 'true'
         uses: actions/github-script@v9
         with:
           script: |
@@ -295,7 +315,6 @@ jobs:
       # whatever it changed into a patch that the publish job checks before pushing.
       - name: Fix agent
         id: agent
-        if: steps.queue.outputs.ready == 'true'
         continue-on-error: true
         timeout-minutes: ${{ inputs.timeout-minutes }}
         uses: anthropics/claude-code-action@v1
@@ -313,7 +332,6 @@ jobs:
 
       - name: Collect the change
         id: result
-        if: steps.queue.outputs.ready == 'true'
         uses: actions/github-script@v9
         env:
           START_SHA: ${{ steps.start.outputs.sha }}
@@ -444,12 +462,14 @@ jobs:
 
   handoff:
     name: Hand off
-    needs: [gate, agent, publish]
+    needs: [gate, queue, agent, publish]
     if: >-
       ${{ !cancelled() && (
         needs.gate.outputs.mode == 'handoff' ||
         needs.gate.outputs.mode == 'takeover' ||
         ((needs.gate.outputs.mode == 'fix' || needs.gate.outputs.mode == 'retry') && (
+          needs.queue.result == 'failure' ||
+          needs.queue.outputs.reason != '' ||
           needs.agent.result == 'failure' ||
           needs.agent.outputs.handoff-reason != '' ||
           needs.publish.result == 'failure' ||
@@ -511,6 +531,8 @@ jobs:
           GATE_REASON: ${{ needs.gate.outputs.reason }}
           ISSUE_NUMBER: ${{ needs.gate.outputs.issue-number }}
           CONFIG: ${{ needs.gate.outputs.config }}
+          QUEUE_RESULT: ${{ needs.queue.result }}
+          QUEUE_REASON: ${{ needs.queue.outputs.reason }}
           AGENT_RESULT: ${{ needs.agent.result }}
           AGENT_REASON: ${{ needs.agent.outputs.handoff-reason }}
           PUBLISH_RESULT: ${{ needs.publish.result }}

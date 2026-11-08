@@ -8,7 +8,7 @@
 const notFound = () => Object.assign(new Error("Not Found"), { status: 404 });
 const names = (issue) => issue.labels.map((l) => (typeof l === "string" ? l : l.name));
 
-function fakeGitHub({ issues = [], labels = [], teams = {}, commits = {}, pulls = [], branches = [], runs = {}, jobs = {}, logs = {}, users = {} } = {}) {
+function fakeGitHub({ issues = [], labels = [], teams = {}, commits = {}, pulls = [], branches = [], runs = {}, jobs = {}, logs = {}, users = {}, permissions = {}, reviewComments = [] } = {}) {
   const byNumber = new Map(
     issues.map((i) => [
       i.number,
@@ -17,6 +17,7 @@ function fakeGitHub({ issues = [], labels = [], teams = {}, commits = {}, pulls 
   );
   const prs = pulls.map((p) => ({ state: "open", body: "", html_url: `https://github.test/pull/${p.number}`, ...p }));
   const comments = new Map();
+  const replies = [];
   const calls = [];
   let nextCommentId = 1;
 
@@ -91,6 +92,17 @@ function fakeGitHub({ issues = [], labels = [], teams = {}, commits = {}, pulls 
       },
     },
     pulls: {
+      get: async ({ pull_number }) => {
+        const pr = prs.find((p) => p.number === pull_number);
+        if (!pr) throw notFound();
+        return { data: pr };
+      },
+      listReviewComments: async () => ({ data: reviewComments }),
+      createReplyForReviewComment: async ({ comment_id, body }) => {
+        calls.push(["createReplyForReviewComment", comment_id]);
+        replies.push({ comment_id, body });
+        return { data: {} };
+      },
       list: async ({ owner, head, state = "open" }) => ({
         data: prs.filter((p) => p.state === state && `${owner}:${p.head.ref}` === head),
       }),
@@ -135,7 +147,21 @@ function fakeGitHub({ issues = [], labels = [], teams = {}, commits = {}, pulls 
         return { data: { login: username, id: users[username] } };
       },
     },
+    reactions: {
+      createForIssueComment: async ({ comment_id, content }) => {
+        calls.push(["reaction", "issue_comment", comment_id, content]);
+        return { data: {} };
+      },
+      createForPullRequestReviewComment: async ({ comment_id, content }) => {
+        calls.push(["reaction", "review_comment", comment_id, content]);
+        return { data: {} };
+      },
+    },
     repos: {
+      getCollaboratorPermissionLevel: async ({ username }) => {
+        if (!(username in permissions)) throw notFound();
+        return { data: { permission: permissions[username] } };
+      },
       listCommits: async ({ path }) => ({
         data: (commits[path] ?? []).map(([login, date]) => ({
           author: login ? { login, type: "User" } : null,
@@ -147,7 +173,7 @@ function fakeGitHub({ issues = [], labels = [], teams = {}, commits = {}, pulls 
 
   const paginate = async (fn, params) => (await fn(params)).data;
 
-  return { rest, paginate, calls, comments, issue, prs };
+  return { rest, paginate, calls, comments, replies, issue, prs };
 }
 
 module.exports = { fakeGitHub };

@@ -2,14 +2,23 @@
 
 const fs = require("node:fs");
 const path = require("node:path");
-const { execFileSync } = require("node:child_process");
 const { loadConfig, ConfigError } = require("./config");
 const { pickAssignee } = require("./assign");
-const { checkChanges, changedFiles } = require("./guardrail");
-const { waitForTurn, workflowFileFromRef, parseWorkflowList } = require("./queue");
 const { failureExcerpt } = require("./ci-logs");
 const { collectContext, buildPrompt, labelNames, hasLabel, envLabel } = require("./context");
 const { COMMENT_MARKER: TRIAGE_MARKER, safe, code, upsertComment, removeLabel, addLabels } = require("./triage");
+const {
+  env,
+  json,
+  stepWait,
+  allowedTools,
+  excludeAgentFiles,
+  limitReason,
+  parseVerdict,
+  makePatch,
+  applyAndPush,
+  botIdentity,
+} = require("./agent-run");
 
 /**
  * Feedback fix: when an issue gets `route:agent`, Claude makes the change and the workflow opens
@@ -232,29 +241,6 @@ async function gateWorkflowRun({ github, context, owner, repo }) {
 
 // ─── Agent ───────────────────────────────────────────────────────────────────
 
-const SAFE_COMMAND = /^[A-Za-z0-9 _.:/=@+-]+$/;
-
-/** The agent edits files and runs only lint, typecheck and read-only git. */
-function allowedTools({ lint, typecheck }) {
-  for (const command of [lint, typecheck]) {
-    if (!SAFE_COMMAND.test(command)) throw new Error(`Unsupported characters in command: ${command}`);
-  }
-  const bash = (command) => [`Bash(${command})`, `Bash(${command}:*)`];
-  return [
-    "Read",
-    "Glob",
-    "Grep",
-    "Edit",
-    "MultiEdit",
-    "Write",
-    ...bash(lint),
-    ...bash(typecheck),
-    "Bash(git diff:*)",
-    "Bash(git status:*)",
-    "Bash(git log:*)",
-  ].join(",");
-}
-
 function situation({ mode, branchExists, branch, base }) {
   if (mode === "retry") {
     return [
@@ -271,27 +257,8 @@ function situation({ mode, branchExists, branch, base }) {
 
 /** What the agent run left behind, as a hand-off reason (empty if it finished). */
 function agentOutcome({ outcome, structuredOutput, executionFile, hasPatch, maxTurns, timeoutMinutes }) {
-  let verdict = null;
-  try {
-    verdict = structuredOutput ? JSON.parse(structuredOutput) : null;
-  } catch {
-    verdict = null;
-  }
-
-  if (outcome !== "success" || !verdict) {
-    let subtype = null;
-    try {
-      const turns = JSON.parse(fs.readFileSync(executionFile, "utf8"));
-      subtype = [...turns].reverse().find((t) => t?.type === "result")?.subtype ?? null;
-    } catch {
-      subtype = null;
-    }
-    const reason =
-      subtype === "error_max_turns"
-        ? `the agent hit its ${maxTurns}-turn limit`
-        : `the agent stopped without finishing (it failed or hit the ${timeoutMinutes}-minute limit)`;
-    return { reason, verdict };
-  }
+  const verdict = parseVerdict(structuredOutput);
+  if (outcome !== "success" || !verdict) return { reason: limitReason({ executionFile, maxTurns, timeoutMinutes }), verdict };
   if (verdict.status === "gave_up") {
     return { reason: `the agent gave up: ${oneLine(verdict.reason) || "no reason given"}`, verdict };
   }
@@ -335,21 +302,6 @@ function readTemplate(cwd) {
   return null;
 }
 
-function gitRunner(cwd, token) {
-  const auth = token
-    ? ["-c", `http.https://github.com/.extraheader=AUTHORIZATION: basic ${Buffer.from(`x-access-token:${token}`).toString("base64")}`]
-    : [];
-  return (args, { withAuth = false } = {}) =>
-    execFileSync("git", [...(withAuth ? auth : []), ...args], {
-      cwd,
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-      maxBuffer: 64 * 1024 * 1024,
-    });
-}
-
-const errorText = (error) => String(error.stderr || error.message).trim().split("\n").slice(-3).join(" ");
-
 /**
  * Apply the agent's patch, check the whole branch against the guardrail and only then commit,
  * push and open or update the PR. Runs with the App token and without the model.
@@ -363,44 +315,12 @@ async function publish({ github, owner, repo, cwd, plan, patchFile, agent, confi
     return { skipped: "the issue is closed or no longer `route:agent`" };
   }
 
-  const git = gitRunner(cwd, pushToken);
-  if (!patchFile || !fs.existsSync(patchFile) || !fs.readFileSync(patchFile, "utf8").trim()) {
-    return { handoff: ["the agent finished without changing any files"], files: [] };
-  }
-  try {
-    git(["apply", "--index", "--binary", "--whitespace=nowarn", patchFile]);
-  } catch (error) {
-    return { handoff: [`the agent's changes couldn't be applied: ${errorText(error)}`], files: [] };
-  }
-
-  git(["fetch", "--no-tags", "--quiet", "origin", `+refs/heads/${base}:refs/remotes/origin/${base}`], { withAuth: true });
-  const check = checkChanges({ files: changedFiles({ baseRef: `origin/${base}`, cwd }), config });
-  if (check.violations.length > 0) {
-    return { handoff: ["Nothing was pushed, because the change breaks the agent's rules:", ...check.violations], files: check.files };
-  }
-
   const title = `Feedback #${issueNumber}: ${oneLine(issue.title, 100)}`;
-  git([
-    "-c",
-    `user.name=${identity.name}`,
-    "-c",
-    `user.email=${identity.email}`,
-    "commit",
-    "--no-verify",
-    "--quiet",
-    "-m",
-    title,
-    "-m",
-    `Refs #${issueNumber}`,
-  ]);
-  try {
-    git(["push", "--quiet", "origin", `HEAD:refs/heads/${branch}`], { withAuth: true });
-  } catch (error) {
-    return {
-      handoff: [`pushing to \`${branch}\` was rejected, probably because someone pushed while the agent worked: ${errorText(error)}`],
-      files: check.files,
-    };
+  const pushed = applyAndPush({ cwd, base, branch, patchFile, config, identity, pushToken, message: [title, `Refs #${issueNumber}`] });
+  if (pushed.violations) {
+    return { handoff: ["Nothing was pushed, because the change breaks the agent's rules:", ...pushed.violations], files: pushed.files };
   }
+  if (pushed.error) return { handoff: [pushed.error], files: pushed.files };
 
   const body = prBody({
     template: readTemplate(cwd),
@@ -438,7 +358,7 @@ async function publish({ github, owner, repo, cwd, plan, patchFile, agent, confi
     ].join("\n"),
     FIX_MARKER
   );
-  return { pr: { number: pr.number, url: pr.html_url, created }, files: check.files };
+  return { pr: { number: pr.number, url: pr.html_url, created }, files: pushed.files };
 }
 
 // ─── Hand-off ────────────────────────────────────────────────────────────────
@@ -507,15 +427,6 @@ async function handoff({ github, owner, repo, issueNumber, config, mode, reasons
 
 // ─── Workflow steps ──────────────────────────────────────────────────────────
 
-const env = (name, fallback = "") => process.env[name] ?? fallback;
-const json = (name, fallback) => {
-  try {
-    return JSON.parse(env(name)) ?? fallback;
-  } catch {
-    return fallback;
-  }
-};
-
 /** gate: decide the mode and everything the later jobs need. */
 async function stepGate({ github, context, core }) {
   const { owner, repo } = context.repo;
@@ -550,27 +461,6 @@ async function stepGate({ github, context, core }) {
   core.notice(`Feedback fix for ${target}: ${result.mode}${result.reason ? ` (${result.reason})` : ""}`);
 }
 
-/** agent: wait until no earlier agent run in this repo is still going. */
-async function stepWait({ github, context, core }) {
-  const { owner, repo } = context.repo;
-  const own = workflowFileFromRef(env("GITHUB_WORKFLOW_REF"));
-  if (!own) core.warning(`Couldn't tell this workflow's file from ${env("GITHUB_WORKFLOW_REF")}; queueing on queue-workflows only.`);
-  const minutes = Number(env("QUEUE_TIMEOUT_MINUTES", "90")) || 90;
-  const result = await waitForTurn({
-    github,
-    owner,
-    repo,
-    workflows: [own, ...parseWorkflowList(env("QUEUE_WORKFLOWS"))].filter(Boolean),
-    runId: Number(env("GITHUB_RUN_ID")),
-    timeoutMs: minutes * 60_000,
-    log: (message) => core.info(message),
-  });
-  core.setOutput("ready", String(result.ready));
-  if (!result.ready) {
-    core.setOutput("handoff-reason", `other agent runs in this repo were still going after ${minutes} minutes`);
-  }
-}
-
 /** agent: collect what the agent reads and build its prompt. */
 async function stepPrepare({ github, context, core }) {
   const { owner, repo } = context.repo;
@@ -580,10 +470,7 @@ async function stepPrepare({ github, context, core }) {
   const issueNumber = Number(env("ISSUE_NUMBER"));
   const mode = env("MODE");
 
-  // The agent's inputs and the scripts must never end up in its patch.
-  const exclude = path.join(workspace, ".git", "info", "exclude");
-  fs.mkdirSync(path.dirname(exclude), { recursive: true });
-  fs.appendFileSync(exclude, `\n/${CONTEXT_DIR}/\n/.nexus-workflows/\n/.feedback-secrets.env\n`);
+  excludeAgentFiles(workspace, CONTEXT_DIR);
 
   const { data: issue } = await github.rest.issues.get({ owner, repo, issue_number: issueNumber });
   const collected = await collectContext({
@@ -633,15 +520,11 @@ async function stepPrepare({ github, context, core }) {
 
 /** agent: turn the agent's work into a patch file and a result for the next jobs. */
 function stepResult({ core }) {
-  const workspace = env("GITHUB_WORKSPACE");
-  const git = (...args) => execFileSync("git", args, { cwd: workspace, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
-  // Against the starting commit, not HEAD, so the patch is complete even if something committed.
-  git("add", "-A");
-  const patch = git("diff", "--cached", "--binary", env("START_SHA"));
-
-  const outDir = path.join(env("RUNNER_TEMP"), "feedback-fix");
-  fs.mkdirSync(outDir, { recursive: true });
-  fs.writeFileSync(path.join(outDir, "changes.patch"), patch);
+  const patch = makePatch({
+    cwd: env("GITHUB_WORKSPACE"),
+    startSha: env("START_SHA"),
+    outFile: path.join(env("RUNNER_TEMP"), "feedback-fix", "changes.patch"),
+  });
 
   const { reason, verdict } = agentOutcome({
     outcome: env("AGENT_OUTCOME"),
@@ -661,14 +544,7 @@ function stepResult({ core }) {
 /** publish: guardrail, commit, push and PR, with the App token. */
 async function stepPublish({ github, context, core }) {
   const { owner, repo } = context.repo;
-  const slug = env("APP_SLUG");
-  let email = `${slug}[bot]@users.noreply.github.com`;
-  try {
-    const { data: user } = await github.rest.users.getByUsername({ username: `${slug}[bot]` });
-    email = `${user.id}+${slug}[bot]@users.noreply.github.com`;
-  } catch (error) {
-    core.warning(`Couldn't look up ${slug}[bot]: ${error.message}`);
-  }
+  const identity = await botIdentity(github, env("APP_SLUG"), (message) => core.warning(message));
 
   const result = await publish({
     github,
@@ -686,7 +562,7 @@ async function stepPublish({ github, context, core }) {
     patchFile: env("PATCH_FILE"),
     agent: { changes: json("CHANGES", []), notes: env("NOTES") },
     config: JSON.parse(env("CONFIG")),
-    identity: { name: `${slug}[bot]`, email },
+    identity,
     pushToken: env("PUSH_TOKEN"),
     log: (message) => core.warning(message),
   });
@@ -710,6 +586,10 @@ async function stepHandoff({ github, context, core }) {
   const reasons = [];
   if (mode === "handoff" || mode === "takeover") {
     reasons.push(env("GATE_REASON"));
+  } else if (env("QUEUE_REASON")) {
+    reasons.push(env("QUEUE_REASON"));
+  } else if (env("QUEUE_RESULT") === "failure") {
+    reasons.push("waiting for other agent runs failed; see the workflow run");
   } else if (env("AGENT_REASON")) {
     reasons.push(env("AGENT_REASON"));
   } else if (env("AGENT_RESULT") === "failure") {
@@ -750,6 +630,8 @@ async function stepHandoff({ github, context, core }) {
 module.exports = {
   FIX_SCHEMA,
   FIX_MARKER,
+  PR_MARKER,
+  BRANCH_PREFIX,
   slugify,
   branchName,
   issueFromBranch,
