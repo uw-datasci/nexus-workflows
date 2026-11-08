@@ -1,0 +1,265 @@
+name: Feedback Triage
+
+# Triage for feedback issues (issues labelled `feedback`): Claude reads the issue and the code and
+# suggests who should fix it; a script turns that into route:agent / route:dev, size:*, area:*,
+# an assignee and a triage comment. The rules live in scripts/feedback/ and are documented in the
+# README. Spec: Feedback loop §4 Triage.
+#
+# Two jobs, so the model never holds a write token:
+# - analyze: read-only GITHUB_TOKEN + the Anthropic key. Produces a verdict.
+# - apply:   the nexus-feedback GitHub App token, no model. Labels from an App token (unlike
+#            GITHUB_TOKEN) trigger other workflows, which the fix workflow relies on.
+
+on:
+  workflow_call:
+    inputs:
+      infisical-project-slug:
+        required: true
+        type: string
+        description: "The Infisical project slug that holds the feedback folder"
+      infisical-secret-path:
+        required: false
+        type: string
+        default: "/nexus-feedback"
+        description: "Infisical folder with FEEDBACK_ANTHROPIC_API_KEY and the nexus-feedback App credentials"
+      infisical-env-slug:
+        required: false
+        type: string
+        default: "prod"
+        description: "Infisical environment to read the feedback secrets from"
+      config-path:
+        required: false
+        type: string
+        default: ".github/feedback.yml"
+        description: "Path of the feedback config in the calling repo"
+      issue-number:
+        required: false
+        type: number
+        default: 0
+        description: "Issue to triage (default: the issue from the triggering event)"
+      retriage:
+        required: false
+        type: boolean
+        default: false
+        description: "Triage again even if the issue already has a route label"
+      model:
+        required: false
+        type: string
+        default: "claude-sonnet-5-5"
+      max-turns:
+        required: false
+        type: number
+        default: 15
+      allowed-bots:
+        required: false
+        type: string
+        default: ""
+        description: "Bot users allowed to trigger triage, e.g. 'nexus-feedback[bot]' (issues filed from Discord)"
+      workflows-ref:
+        required: false
+        type: string
+        default: "v4"
+        description: "Ref of uw-datasci/nexus-workflows to load the feedback scripts from (match the ref you call this workflow at)"
+    secrets:
+      INFISICAL_CLIENT_ID:
+        required: true
+      INFISICAL_CLIENT_SECRET:
+        required: true
+
+jobs:
+  analyze:
+    name: Analyze
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      issues: read
+    # One triage per issue at a time; a queued run sees the first run's route label and skips.
+    concurrency:
+      group: feedback-triage-${{ github.repository }}-${{ inputs.issue-number || github.event.issue.number }}
+      cancel-in-progress: false
+    outputs:
+      run: ${{ steps.gate.outputs.run }}
+      issue-number: ${{ steps.gate.outputs.issue-number }}
+      config: ${{ steps.prepare.outputs.config }}
+      verdict: ${{ steps.verdict.outputs.json }}
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Checkout feedback scripts
+        uses: actions/checkout@v6
+        with:
+          repository: uw-datasci/nexus-workflows
+          ref: ${{ inputs.workflows-ref }}
+          path: .nexus-workflows
+          persist-credentials: false
+
+      - name: Check whether to triage
+        id: gate
+        uses: actions/github-script@v9
+        env:
+          ISSUE_NUMBER: ${{ inputs.issue-number || github.event.issue.number }}
+          RETRIAGE: ${{ inputs.retriage }}
+        with:
+          script: |
+            const { stepGate } = require(`${process.env.GITHUB_WORKSPACE}/.nexus-workflows/scripts/feedback/triage.js`);
+            await stepGate({ github, context, core });
+
+      - name: Read feedback config
+        if: steps.gate.outputs.run == 'true'
+        env:
+          CONFIG_PATH: ${{ inputs.config-path }}
+        run: |
+          if [ ! -f "$CONFIG_PATH" ]; then
+            echo "::error::$CONFIG_PATH not found. Add it to opt this repo into the feedback loop (see the nexus-workflows README)."
+            exit 1
+          fi
+          mkdir -p .feedback
+          yq -o=json '.' "$CONFIG_PATH" > .feedback/config.raw.json
+
+      - name: Collect issue context
+        id: prepare
+        if: steps.gate.outputs.run == 'true'
+        uses: actions/github-script@v9
+        env:
+          ISSUE_NUMBER: ${{ steps.gate.outputs.issue-number }}
+          CONFIG_PATH: ${{ inputs.config-path }}
+          GITHUB_TOKEN: ${{ github.token }}
+        with:
+          script: |
+            const { stepPrepare } = require(`${process.env.GITHUB_WORKSPACE}/.nexus-workflows/scripts/feedback/triage.js`);
+            await stepPrepare({ github, context, core });
+
+      # Exported to a file, not the environment, so the agent step only gets the one key it needs.
+      - name: Pull secrets from Infisical
+        if: steps.gate.outputs.run == 'true' && steps.prepare.outputs.environment != ''
+        uses: infisical/secrets-action@v1.0.16
+        with:
+          env-slug: ${{ inputs.infisical-env-slug }}
+          client-id: ${{ secrets.INFISICAL_CLIENT_ID }}
+          client-secret: ${{ secrets.INFISICAL_CLIENT_SECRET }}
+          project-slug: ${{ inputs.infisical-project-slug }}
+          secret-path: ${{ inputs.infisical-secret-path }}
+          export-type: file
+          file-output-path: /.feedback-secrets.env
+
+      - name: Read Anthropic key
+        id: secrets
+        if: steps.gate.outputs.run == 'true' && steps.prepare.outputs.environment != ''
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const { readSecrets } = require(`${process.env.GITHUB_WORKSPACE}/.nexus-workflows/scripts/feedback/secrets.js`);
+            readSecrets({
+              file: `${process.env.GITHUB_WORKSPACE}/.feedback-secrets.env`,
+              outputs: { "anthropic-api-key": ["FEEDBACK_ANTHROPIC_API_KEY"] },
+              core,
+            });
+
+      # Read-only: no Bash or edit tools, and a GITHUB_TOKEN that can't write.
+      # If it fails, the verdict step sends the issue to a developer.
+      - name: Triage agent
+        id: agent
+        if: steps.gate.outputs.run == 'true' && steps.prepare.outputs.environment != ''
+        continue-on-error: true
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ steps.secrets.outputs.anthropic-api-key }}
+          github_token: ${{ github.token }}
+          allowed_bots: ${{ inputs.allowed-bots }}
+          prompt: ${{ steps.prepare.outputs.prompt }}
+          claude_args: |
+            --model ${{ inputs.model }}
+            --max-turns ${{ inputs.max-turns }}
+            --allowedTools Read,Glob,Grep
+            --disallowedTools Bash,Edit,MultiEdit,Write,NotebookEdit,WebFetch,WebSearch
+            --json-schema '${{ steps.prepare.outputs.schema }}'
+
+      - name: Verdict
+        id: verdict
+        if: steps.gate.outputs.run == 'true'
+        uses: actions/github-script@v9
+        env:
+          ENVIRONMENT: ${{ steps.prepare.outputs.environment }}
+          STRUCTURED_OUTPUT: ${{ steps.agent.outputs.structured_output }}
+        with:
+          script: |
+            const { stepVerdict } = require(`${process.env.GITHUB_WORKSPACE}/.nexus-workflows/scripts/feedback/triage.js`);
+            stepVerdict({ core });
+
+      - name: Remove secrets file
+        if: always()
+        run: rm -f .feedback-secrets.env
+
+  apply:
+    name: Apply
+    needs: analyze
+    if: needs.analyze.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout feedback scripts
+        uses: actions/checkout@v6
+        with:
+          repository: uw-datasci/nexus-workflows
+          ref: ${{ inputs.workflows-ref }}
+          path: .nexus-workflows
+          persist-credentials: false
+
+      - name: Pull secrets from Infisical
+        uses: infisical/secrets-action@v1.0.16
+        with:
+          env-slug: ${{ inputs.infisical-env-slug }}
+          client-id: ${{ secrets.INFISICAL_CLIENT_ID }}
+          client-secret: ${{ secrets.INFISICAL_CLIENT_SECRET }}
+          project-slug: ${{ inputs.infisical-project-slug }}
+          secret-path: ${{ inputs.infisical-secret-path }}
+          export-type: file
+          file-output-path: /.feedback-secrets.env
+
+      - name: Read App credentials
+        id: secrets
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const { readSecrets } = require(`${process.env.GITHUB_WORKSPACE}/.nexus-workflows/scripts/feedback/secrets.js`);
+            readSecrets({
+              file: `${process.env.GITHUB_WORKSPACE}/.feedback-secrets.env`,
+              outputs: {
+                "client-id": ["FEEDBACK_APP_CLIENT_ID", "FEEDBACK_APP_ID"],
+                "private-key": ["FEEDBACK_APP_PRIVATE_KEY"],
+              },
+              core,
+            });
+
+      - name: Create nexus-feedback App token
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ steps.secrets.outputs.client-id }}
+          private-key: ${{ steps.secrets.outputs.private-key }}
+          permission-issues: write
+          permission-contents: read
+          permission-members: read
+
+      - name: Apply triage
+        uses: actions/github-script@v9
+        env:
+          ISSUE_NUMBER: ${{ needs.analyze.outputs.issue-number }}
+          CONFIG: ${{ needs.analyze.outputs.config }}
+          VERDICT: ${{ needs.analyze.outputs.verdict }}
+          RETRIAGE: ${{ inputs.retriage }}
+        with:
+          github-token: ${{ steps.app-token.outputs.token }}
+          script: |
+            const { stepApply } = require(`${process.env.GITHUB_WORKSPACE}/.nexus-workflows/scripts/feedback/triage.js`);
+            await stepApply({ github, context, core });
+
+      - name: Remove secrets file
+        if: always()
+        run: rm -f .feedback-secrets.env

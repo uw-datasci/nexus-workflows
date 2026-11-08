@@ -1,0 +1,24 @@
+name: Test Scripts
+
+# Unit tests for the scripts the reusable workflows load (scripts/feedback/). No dependencies.
+
+on:
+  push:
+    branches: [main]
+    paths: ["scripts/**", ".github/workflows/test-scripts.yml"]
+  pull_request:
+    paths: ["scripts/**", ".github/workflows/test-scripts.yml"]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: node --test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+      - run: node --test 'scripts/**/*.test.js'

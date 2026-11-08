@@ -9,6 +9,99 @@ Reusable GitHub Actions workflows for the Data Science Club.
 - **Quality Gate** - Lint and typecheck
 - **Quality Sonar** - SonarQube analysis
 - **Dispatch Docs Update** - Notify the docs app (nexus-docs) when a PR merges so the changelog gets updated
+- **Feedback Triage** - Route feedback issues to Claude (`route:agent`) or a developer (`route:dev`). See [Feedback loop](#feedback-loop)
+
+## Feedback loop
+
+App repos opt in with a `.github/feedback.yml` and a caller workflow. Organizers' feedback becomes issues labelled `feedback`, and triage decides who fixes each one. Spec: [Feedback loop](https://app.notion.com/p/4111b70395fc8183aa09f377e40f1f5e).
+
+### `.github/feedback.yml`
+
+```yaml
+app: cxc
+strictness: strict        # strict | relaxed
+branches:
+  production: main
+  staging: dev
+lead: <github-handle>
+dev_team: cxc-dev         # empty = every dev issue goes to the lead
+devs:                     # optional overrides for clear ownership
+  - github: <handle>
+    areas: [landing, auth]
+agent:
+  enabled: true
+  max_files: 5
+  never_touch: [migrations/**, lib/auth/**, proxy.ts, config/site.ts, .github/**, package.json, pnpm-lock.yaml]
+```
+
+`never_touch` patterns work like `.gitignore`. A pattern without `/` matches that file name at any depth (`package.json` also blocks `apps/web/package.json`). A pattern with `/` is anchored at the repo root. `**` crosses directories and `*` doesn't.
+
+### Feedback Triage
+
+`.github/workflows/feedback-triage.yml` runs when an issue gets the `feedback` label. It has two jobs:
+
+1. **Analyze.** Claude (`claude-sonnet-5-5`, read-only tools, a read-only token) reads the issue, its screenshots, `AGENTS.md`, the config and the code, and returns a verdict.
+2. **Apply.** A script, using the `nexus-feedback` GitHub App token, turns the verdict into labels, an assignee and a triage comment. Labels from an App token trigger other workflows; labels from `GITHUB_TOKEN` wouldn't.
+
+The verdict only *suggests* a route. The script sends the issue to the agent only when every one of these holds:
+
+- `agent.enabled` is true
+- the fix needs between 1 and `max_files` files, and none of them match `never_touch`
+- no new dependency, database change or environment variable is needed
+- the expected result is clear
+
+Anything else goes to `route:dev`, and the comment says which rule decided it.
+
+| Outcome | Labels | Assignee |
+|---|---|---|
+| `route:agent` | `route:agent`, `size:*`, `area:*` | the `lead`, who reviews the agent's PR |
+| `route:dev` | `route:dev`, `size:*`, `area:*` | a `devs` override for the area; otherwise the `dev_team` member who most recently changed the likely files, skipping anyone with 3+ open feedback issues; otherwise the `lead` |
+| unclear, or no `env:prod` / `env:staging` label | `needs-info`, plus a question comment | none |
+
+- The route label is added last, so the fix workflow finds the comment and assignee in place.
+- `area:*` values come from the repo's existing `area:*` labels.
+- `strict` repos never close anything and flag possible duplicates for the lead. `relaxed` repos close duplicates.
+- An issue that already has a route label isn't triaged again unless `retriage: true`.
+- Only the `labeled` event (adding `feedback`) starts triage. Creating an issue with labels fires both `opened` and `labeled`, so `opened` is skipped.
+
+**Inputs**
+
+| Input | Default | |
+|---|---|---|
+| `infisical-project-slug` | required | Project holding the feedback secrets |
+| `infisical-secret-path` | `/nexus-feedback` | Folder with `FEEDBACK_ANTHROPIC_API_KEY`, `FEEDBACK_APP_CLIENT_ID` (or `FEEDBACK_APP_ID`) and `FEEDBACK_APP_PRIVATE_KEY` |
+| `infisical-env-slug` | `prod` | |
+| `config-path` | `.github/feedback.yml` | |
+| `issue-number` | the event's issue | |
+| `retriage` | `false` | Triage again even if a route label is set |
+| `model` / `max-turns` | `claude-sonnet-5-5` / `15` | |
+| `allowed-bots` | empty | e.g. `nexus-feedback[bot]`, for issues filed from Discord |
+| `workflows-ref` | `v4` | Ref the feedback scripts are loaded from; match the ref you call the workflow at |
+
+Secrets: `INFISICAL_CLIENT_ID`, `INFISICAL_CLIENT_SECRET`. The secrets are exported to a file and read per job, so the agent step only ever sees the Anthropic key.
+
+**Caller example**
+
+```yaml
+on:
+  issues:
+    types: [labeled]
+
+jobs:
+  triage:
+    uses: uw-datasci/nexus-workflows/.github/workflows/feedback-triage.yml@v4
+    permissions:
+      contents: read
+      issues: read
+    with:
+      infisical-project-slug: uwdsc-54e-y
+      allowed-bots: nexus-feedback[bot]
+    secrets:
+      INFISICAL_CLIENT_ID: ${{ secrets.INFISICAL_CLIENT_ID }}
+      INFISICAL_CLIENT_SECRET: ${{ secrets.INFISICAL_CLIENT_SECRET }}
+```
+
+The scripts behind it live in `scripts/feedback/`, and their tests run with `node --test 'scripts/**/*.test.js'`.
 
 ## Release Automation
 
