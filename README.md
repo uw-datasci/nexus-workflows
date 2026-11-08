@@ -10,6 +10,7 @@ Reusable GitHub Actions workflows for the Data Science Club.
 - **Quality Sonar** - SonarQube analysis
 - **Dispatch Docs Update** - Notify the docs app (nexus-docs) when a PR merges so the changelog gets updated
 - **Feedback Triage** - Route feedback issues to Claude (`route:agent`) or a developer (`route:dev`). See [Feedback loop](#feedback-loop)
+- **Feedback Fix** - Have Claude fix `route:agent` issues and open a PR for review. See [Feedback Fix](#feedback-fix)
 
 ## Feedback loop
 
@@ -101,7 +102,86 @@ jobs:
       INFISICAL_CLIENT_SECRET: ${{ secrets.INFISICAL_CLIENT_SECRET }}
 ```
 
-The scripts behind it live in `scripts/feedback/`, and their tests run with `node --test 'scripts/**/*.test.js'`.
+### Feedback Fix
+
+`.github/workflows/feedback-fix.yml` runs when an issue gets `route:agent`. Claude makes the change and the workflow opens a PR for a person to review. **The agent never merges.** If it can't finish, a developer takes over.
+
+The model never runs in a job that holds a write token:
+
+1. **Gate.** Decides what to do from the event (table below). The config is always read from the default branch.
+2. **Agent.** Waits its turn, installs dependencies, and runs Claude (`claude-sonnet-5-5`, 40 turns, 20 minutes). It can edit files and run the lint and typecheck commands, nothing else. Its token can't push. What it changed is uploaded as a patch.
+3. **Publish.** With the `nexus-feedback` App token and no model, it applies the patch and checks the guardrail. Only then does it commit, push and open or update the PR. App-token pushes start the app's quality gate on the PR.
+4. **Hand off.** If anything went wrong, it assigns a developer (same rules as triage), comments why, and swaps `route:agent` for `route:dev`.
+
+| Event | What happens |
+|---|---|
+| `route:agent` added | The agent works on `feedback/<issue>-<slug>`, cut from `branches.staging` for `env:staging` or `branches.production` for `env:prod`, and opens a PR into that branch. If the branch already exists (a second try), it continues on it. |
+| `route:agent` added, but `agent.enabled: false` or no `env:*` label | Hand off |
+| A person adds `route:dev` | The running agent is cancelled and a developer is assigned (one who is already assigned keeps it) |
+| A person removes `route:agent` | The running agent is cancelled |
+| The PR's quality gate fails | The first time, the agent retries once with the failure output. The second time, hand off. |
+
+**Guardrail.** Before anything is pushed, every file the branch changes against its base (renames and deletions included) is checked. The run hands off without pushing if:
+
+- any path matches `never_touch`
+- any path is in `.github/workflows/`, whatever the config says
+- the branch changes more than `max_files` files
+
+The same check is in `scripts/feedback/guardrail.js` for the `@claude` workflow.
+
+**The PR**
+
+- **Body:** the repo's PR template (`.github/pull_request_template.md`), with the issue number filled in and the agent's list of changes. It includes `closes #N`.
+- **Reviewer:** the `lead` is requested, and CODEOWNERS applies as usual.
+- **Closing:** GitHub only closes issues on merges into the default branch, so a PR into `dev` won't close its issue.
+
+**One agent at a time.** Each repo runs one agent at a time and drops none. A GitHub concurrency group keeps only one pending run, so it isn't used here. Instead, the agent job waits until every older run of the queue workflows has finished: the caller's own workflow, plus `queue-workflows`. Per issue, a concurrency group cancels the old run when the labels flip.
+
+**Inputs**
+
+| Input | Default | |
+|---|---|---|
+| `infisical-project-slug` | required | As for triage |
+| `infisical-secret-path` / `infisical-env-slug` | `/nexus-feedback` / `prod` | |
+| `config-path` | `.github/feedback.yml` | |
+| `model` / `max-turns` / `timeout-minutes` | `claude-sonnet-5-5` / `40` / `20` | |
+| `node-version` / `pnpm-version` | `24` / from `packageManager` | |
+| `install-command` | `pnpm install --frozen-lockfile` | |
+| `lint-command` / `typecheck-command` | `pnpm lint` / `pnpm typecheck` | The only commands the agent may run |
+| `queue-workflows` | empty | Other workflow files whose agent runs share the queue, e.g. the `@claude` caller |
+| `queue-timeout-minutes` | `90` | Keep it under 200, inside the job's 4-hour limit |
+| `allowed-bots` | `nexus-feedback[bot]` | Triage adds `route:agent` as the App, so it must be listed |
+| `workflows-ref` | `v4` | |
+
+Secrets: `INFISICAL_CLIENT_ID`, `INFISICAL_CLIENT_SECRET`. The agent job only ever holds the Anthropic key and a read-only `GITHUB_TOKEN`. The App token never reaches a job that runs the model, and it has no `workflows` permission. Build output that lint or typecheck writes must be gitignored, or it counts towards `max_files`.
+
+**Caller example**
+
+```yaml
+on:
+  issues:
+    types: [labeled, unlabeled]
+  workflow_run:
+    workflows: ["CI Quality Gate"]
+    types: [completed]
+
+jobs:
+  fix:
+    uses: uw-datasci/nexus-workflows/.github/workflows/feedback-fix.yml@v4
+    permissions:
+      contents: read
+      issues: read
+      pull-requests: read
+      actions: read     # the queue and the quality-gate logs
+      packages: read    # pnpm install from GitHub Packages
+    with:
+      infisical-project-slug: uwdsc-54e-y
+    secrets:
+      INFISICAL_CLIENT_ID: ${{ secrets.INFISICAL_CLIENT_ID }}
+      INFISICAL_CLIENT_SECRET: ${{ secrets.INFISICAL_CLIENT_SECRET }}
+```
+
+The scripts behind both workflows live in `scripts/feedback/`, and their tests run with `node --test 'scripts/**/*.test.js'`.
 
 ## Release Automation
 

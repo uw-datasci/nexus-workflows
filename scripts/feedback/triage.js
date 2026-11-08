@@ -194,14 +194,15 @@ function renderComment(outcome, { assignee = null, duplicate = null } = {}) {
 
 // ─── Applying ────────────────────────────────────────────────────────────────
 
-async function upsertComment(github, owner, repo, issueNumber, body) {
+/** Create or update the one comment on the issue that carries `marker`. */
+async function upsertComment(github, owner, repo, issueNumber, body, marker = COMMENT_MARKER) {
   const comments = await github.paginate(github.rest.issues.listComments, {
     owner,
     repo,
     issue_number: issueNumber,
     per_page: 100,
   });
-  const existing = comments.find((c) => c.body?.includes(COMMENT_MARKER));
+  const existing = comments.find((c) => c.body?.includes(marker));
   if (existing) {
     await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body });
   } else {
@@ -432,4 +433,10 @@ module.exports = {
   stepPrepare,
   stepVerdict,
   stepApply,
+  // shared with the fix workflow
+  safe,
+  code,
+  upsertComment,
+  removeLabel,
+  addLabels,
 };
