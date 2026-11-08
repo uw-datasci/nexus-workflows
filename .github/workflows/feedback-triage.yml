@@ -5,6 +5,10 @@ name: Feedback Triage
 # an assignee and a triage comment. The rules live in scripts/feedback/ and are documented in the
 # README. Spec: Feedback loop §4 Triage.
 #
+# Runs when an issue gets `feedback`, or `retriage` (triage again: the bot adds it when an
+# organizer answers a question or says a merged fix is still not right). The agent reads the
+# issue's comments too, so those answers reach it.
+#
 # Two jobs, so the model never holds a write token:
 # - analyze: read-only GITHUB_TOKEN + the Anthropic key. Produces a verdict.
 # - apply:   the nexus-feedback GitHub App token, no model. Labels from an App token (unlike
@@ -41,7 +45,7 @@ on:
         required: false
         type: boolean
         default: false
-        description: "Triage again even if the issue already has a route label"
+        description: "Triage again even if the issue already has a route label (adding the `retriage` label does the same)"
       model:
         required: false
         type: string
@@ -83,6 +87,7 @@ jobs:
       issue-number: ${{ steps.gate.outputs.issue-number }}
       config: ${{ steps.prepare.outputs.config }}
       verdict: ${{ steps.verdict.outputs.json }}
+      retriage: ${{ steps.gate.outputs.retriage }}
     steps:
       - name: Checkout repo
         uses: actions/checkout@v6
@@ -253,7 +258,7 @@ jobs:
           ISSUE_NUMBER: ${{ needs.analyze.outputs.issue-number }}
           CONFIG: ${{ needs.analyze.outputs.config }}
           VERDICT: ${{ needs.analyze.outputs.verdict }}
-          RETRIAGE: ${{ inputs.retriage }}
+          RETRIAGE: ${{ needs.analyze.outputs.retriage }}
         with:
           github-token: ${{ steps.app-token.outputs.token }}
           script: |

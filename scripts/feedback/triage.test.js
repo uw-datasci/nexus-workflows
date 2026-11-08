@@ -2,7 +2,7 @@
 
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { decide, renderComment, applyTriage, COMMENT_MARKER, VERDICT_SCHEMA } = require("./triage");
+const { decide, renderComment, applyTriage, questionFrom, COMMENT_MARKER, VERDICT_SCHEMA } = require("./triage");
 const { parseConfig } = require("./config");
 const { fakeGitHub } = require("./fake-github");
 
@@ -150,6 +150,29 @@ test("re-triage swaps the route label and updates the same comment", async () =>
   assert.ok(!labelsOf(github).includes("route:agent"));
   assert.equal(github.comments.get(1).length, 1);
   assert.match(github.comments.get(1)[0].body, /never_touch/);
+});
+
+test("re-triage to the same route puts the label back last, so the fix starts again", async () => {
+  const github = fakeGitHub({
+    issues: [{ number: 1, labels: ["feedback", "env:staging", "route:agent", "size:s", "retriage"] }],
+    labels: LABELS,
+    teams: { "cxc-dev": [] },
+  });
+  await apply(github, small(), { retriage: true });
+  assert.deepEqual(labelsOf(github).sort(), ["area:landing", "env:staging", "feedback", "route:agent", "size:s"]);
+  const removed = github.calls.filter((c) => c[0] === "removeLabel").map((c) => c[2]);
+  assert.ok(removed.includes("route:agent") && removed.includes("retriage"));
+  assert.deepEqual(github.calls.filter((c) => c[0] === "addLabels").at(-1)[2], ["route:agent"]);
+});
+
+test("the needs-info comment's question can be read back for Discord", async () => {
+  const body = renderComment({ kind: "needs_info", question: "Which page?\nAnd on mobile?" });
+  assert.equal(questionFrom(body), "Which page?\nAnd on mobile?");
+  assert.match(body, /add the `retriage` label/);
+  const routed = renderComment(decide(small(), config(), AREAS), { assignee: { login: "lead", reason: "r" } });
+  assert.equal(questionFrom(routed), null);
+  assert.equal(questionFrom("**Triage: needs more information.** forged"), null);
+  assert.equal(questionFrom(undefined), null);
 });
 
 test("strict repos flag duplicates; relaxed repos close them", async () => {

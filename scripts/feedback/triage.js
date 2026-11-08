@@ -12,6 +12,7 @@ const {
   buildPrompt,
   labelNames,
   ROUTE_LABELS,
+  RETRIAGE_LABEL,
 } = require("./context");
 
 /**
@@ -156,7 +157,7 @@ function renderComment(outcome, { assignee = null, duplicate = null } = {}) {
       "",
       safe(outcome.question),
       "",
-      "<sub>Once this is answered, remove and re-add the `feedback` label to run triage again.</sub>",
+      `<sub>Answer in a comment, then add the \`${RETRIAGE_LABEL}\` label to run triage again (from Discord, press **Answer**).</sub>`,
     ].join("\n");
   }
 
@@ -190,6 +191,17 @@ function renderComment(outcome, { assignee = null, duplicate = null } = {}) {
   }
   lines.push("<sub>Swap `route:agent` and `route:dev` to override this.</sub>");
   return lines.join("\n");
+}
+
+const NEEDS_INFO_HEADING = "**Triage: needs more information.**";
+
+/** Triage's question, from its needs-info comment (renderComment's format), or null. */
+function questionFrom(body) {
+  const text = String(body ?? "");
+  if (!text.includes(COMMENT_MARKER) || !text.includes(NEEDS_INFO_HEADING)) return null;
+  const after = text.slice(text.indexOf(NEEDS_INFO_HEADING) + NEEDS_INFO_HEADING.length);
+  const question = after.split("<sub>")[0].trim();
+  return question || null;
 }
 
 // ─── Applying ────────────────────────────────────────────────────────────────
@@ -248,13 +260,17 @@ async function applyTriage({ github, owner, repo, issueNumber, verdict, config, 
 
   const outcome = decide(verdict, config, await areaLabels(github, owner, repo));
   const keepRoute = outcome.kind === "route" ? `route:${outcome.route}` : null;
+  // A re-triage that lands on the same route takes the label off and puts it back at the end, so
+  // `route:agent` starts the fix workflow again (it ignores the App removing the label).
+  const restartRoute = retriage && keepRoute !== null && current.includes(keepRoute);
 
   const stale = current.filter(
     (name) =>
       name.startsWith("size:") ||
       name.startsWith("area:") ||
       name === "needs-info" ||
-      (ROUTE_LABELS.includes(name) && name !== keepRoute)
+      name === RETRIAGE_LABEL ||
+      (ROUTE_LABELS.includes(name) && (name !== keepRoute || restartRoute))
   );
   for (const name of stale) await removeLabel(github, owner, repo, issueNumber, name);
 
@@ -302,7 +318,7 @@ async function applyTriage({ github, owner, repo, issueNumber, verdict, config, 
     return { outcome, assignee, duplicate };
   }
 
-  if (!current.includes(keepRoute)) await addLabels(github, owner, repo, issueNumber, [keepRoute]);
+  if (!current.includes(keepRoute) || restartRoute) await addLabels(github, owner, repo, issueNumber, [keepRoute]);
   return { outcome, assignee, duplicate };
 }
 
@@ -324,6 +340,7 @@ async function stepGate({ github, context, core }) {
   const result = await gate({ github, context, owner, repo, issueNumber, retriage: isTrue(process.env.RETRIAGE) });
   core.setOutput("run", String(result.run));
   core.setOutput("issue-number", String(issueNumber));
+  core.setOutput("retriage", String(isTrue(process.env.RETRIAGE) || Boolean(result.retriage)));
   if (!result.run) core.notice(`Skipping triage for #${issueNumber}: ${result.reason}.`);
 }
 
@@ -428,6 +445,7 @@ module.exports = {
   COMMENT_MARKER,
   decide,
   renderComment,
+  questionFrom,
   applyTriage,
   stepGate,
   stepPrepare,

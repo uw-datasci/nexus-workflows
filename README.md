@@ -12,6 +12,7 @@ Reusable GitHub Actions workflows for the Data Science Club.
 - **Feedback Triage** - Route feedback issues to Claude (`route:agent`) or a developer (`route:dev`). See [Feedback loop](#feedback-loop)
 - **Feedback Fix** - Have Claude fix `route:agent` issues and open a PR for review. See [Feedback Fix](#feedback-fix)
 - **Claude Mention** - `@claude` on a feedback PR asks Claude for a change. See [Claude Mention](#claude-mention)
+- **Feedback Notify** - Tell the organizer in Discord when a fix is ready to check, live, on staging, or needs info. See [Feedback Notify](#feedback-notify)
 
 ## Feedback loop
 
@@ -40,9 +41,9 @@ agent:
 
 ### Feedback Triage
 
-`.github/workflows/feedback-triage.yml` runs when an issue gets the `feedback` label. It has two jobs:
+`.github/workflows/feedback-triage.yml` runs when an issue gets the `feedback` label, and again whenever it gets the `retriage` label. It has two jobs:
 
-1. **Analyze.** Claude (`claude-sonnet-5-5`, read-only tools, a read-only token) reads the issue, its screenshots, `AGENTS.md`, the config and the code, and returns a verdict.
+1. **Analyze.** Claude (`claude-sonnet-5-5`, read-only tools, a read-only token) reads the issue, its comments, its screenshots, `AGENTS.md`, the config and the code, and returns a verdict. The comments carry answers to triage's questions and organizers' follow-ups from Discord; the workflows' own comments are left out.
 2. **Apply.** A script, using the `nexus-feedback` GitHub App token, turns the verdict into labels, an assignee and a triage comment. Labels from an App token trigger other workflows; labels from `GITHUB_TOKEN` wouldn't.
 
 The verdict only *suggests* a route. The script sends the issue to the agent only when every one of these holds:
@@ -63,7 +64,7 @@ Anything else goes to `route:dev`, and the comment says which rule decided it.
 - The route label is added last, so the fix workflow finds the comment and assignee in place.
 - `area:*` values come from the repo's existing `area:*` labels.
 - `strict` repos never close anything and flag possible duplicates for the lead. `relaxed` repos close duplicates.
-- An issue that already has a route label isn't triaged again unless `retriage: true`.
+- An issue that already has a route label isn't triaged again unless it gets the `retriage` label (or the caller passes `retriage: true`). The apply step removes `retriage` again. When re-triage lands on the same route, the route label is taken off and put back, so `route:agent` starts a new fix. Create the `retriage` label in the repo; nexus-bot adds it when an organizer answers a question or says a merged fix is still not right.
 - Only the `labeled` event (adding `feedback`) starts triage. Creating an issue with labels fires both `opened` and `labeled`, so `opened` is skipped.
 
 **Inputs**
@@ -91,6 +92,7 @@ on:
 
 jobs:
   triage:
+    if: github.event.label.name == 'feedback' || github.event.label.name == 'retriage'
     uses: uw-datasci/nexus-workflows/.github/workflows/feedback-triage.yml@v4
     permissions:
       contents: read
@@ -243,7 +245,75 @@ jobs:
       INFISICAL_CLIENT_SECRET: ${{ secrets.INFISICAL_CLIENT_SECRET }}
 ```
 
-The scripts behind all three workflows live in `scripts/feedback/`, and their tests run with `node --test 'scripts/**/*.test.js'`.
+### Feedback Notify
+
+`.github/workflows/feedback-notify.yml` replies to an issue's Discord card as its fix moves along. It only acts on issues filed from Discord: nexus-bot ends those with a hidden `<!-- nexus-feedback {"guild","channel","message","user"} -->` block naming the card. Issues without it are skipped quietly.
+
+| When | Event | Message |
+|---|---|---|
+| Preview ready | `deployment_status` success, environment `Preview`, on the head commit of an open `feedback/*` PR | `#12 is ready to check`, with **Open preview**, **Looks good** and **Still not right** |
+| Live | `deployment_status` success, environment `Production`, for a `feedback/*` PR merged into `branches.production` | `#12 is live`, with `production-url` |
+| On staging | `pull_request` closed, a `feedback/*` PR merged into `branches.staging` | `#12 is on staging`, with `staging-url` |
+| Needs info | `issues` labeled `needs-info` | triage's question, with **Answer** |
+
+- **The message:** a reply to the card, in its channel or thread, that pings only the person who sent the feedback. Embeds are suppressed.
+- **The token:** `DISCORD_BOT_TOKEN` from the Infisical folder, used for one REST call. The job holds only a read-only `GITHUB_TOKEN` and runs no model.
+- **Failures:** a deleted channel is a warning. Any other Discord error fails the job, since it means the bot's token or permissions are wrong.
+- **The URLs:** the preview link is Vercel's deployment URL from the deployment status. Vercel's GitHub integration creates the deployments and statuses.
+
+**The buttons** are handled by nexus-bot's feedback module. Their custom_ids are the contract between the two:
+
+| custom_id | Button | What nexus-bot does |
+|---|---|---|
+| `fb:good:<owner/repo>:<pr>:<issue>` | Looks good | Comments on the PR |
+| `fb:again:<owner/repo>:<pr>:<issue>` | Still not right | Open PR: an `@claude` comment (`route:agent`) or a mention of the assigned dev. Merged: reopens the issue, comments and adds `retriage` |
+| `fb:answer:<owner/repo>:<issue>` | Answer | Comments on the issue and adds `retriage` |
+
+A custom_id over Discord's 100 characters (a very long repo name) is left off with a warning.
+
+**Inputs**
+
+| Input | Default | |
+|---|---|---|
+| `infisical-project-slug` | required | Project holding the feedback secrets |
+| `infisical-secret-path` | `/nexus-feedback` | Folder with `DISCORD_BOT_TOKEN` |
+| `infisical-env-slug` | `prod` | |
+| `config-path` | `.github/feedback.yml` | For `branches` |
+| `staging-url` | empty | The staging branch's deployment, e.g. `https://cxc-git-dev-uwdsc.vercel.app` |
+| `production-url` | the deployment's URL | The live site |
+| `workflows-ref` | `v4` | |
+
+**Caller example**
+
+```yaml
+on:
+  deployment_status:
+  pull_request:
+    types: [closed]
+  issues:
+    types: [labeled]
+
+jobs:
+  notify:
+    if: >-
+      (github.event_name == 'deployment_status' && github.event.deployment_status.state == 'success') ||
+      (github.event_name == 'pull_request' && github.event.pull_request.merged && startsWith(github.event.pull_request.head.ref, 'feedback/')) ||
+      (github.event_name == 'issues' && github.event.label.name == 'needs-info')
+    uses: uw-datasci/nexus-workflows/.github/workflows/feedback-notify.yml@v4
+    permissions:
+      contents: read
+      issues: read
+      pull-requests: read
+    with:
+      infisical-project-slug: uwdsc-54e-y
+      staging-url: https://cxc-git-dev-uwdsc.vercel.app
+      production-url: https://cxc.uwdatascience.ca
+    secrets:
+      INFISICAL_CLIENT_ID: ${{ secrets.INFISICAL_CLIENT_ID }}
+      INFISICAL_CLIENT_SECRET: ${{ secrets.INFISICAL_CLIENT_SECRET }}
+```
+
+The scripts behind all four workflows live in `scripts/feedback/`, and their tests run with `node --test 'scripts/**/*.test.js'`.
 
 ## Release Automation
 

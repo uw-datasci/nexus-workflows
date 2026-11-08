@@ -1,0 +1,143 @@
+name: Feedback Notify
+
+# Updates in Discord for feedback issues filed from Discord (nexus-bot's /feedback): a reply to
+# the issue's card when the fix's preview is ready, when it's live in production, when it's on
+# staging, and when triage needs more information. Issues without the bot's hidden
+# `nexus-feedback` block are skipped. The logic lives in scripts/feedback/notify.js and is
+# documented in the README. Spec: Feedback loop §6.
+#
+# No model and no write token: a read-only GITHUB_TOKEN, plus the bot token for one REST call.
+#
+# Call it on:
+#   deployment_status (success)          Preview → "ready to check", Production → "is live"
+#   pull_request closed (merged)         a feedback PR merged into the staging branch → "on staging"
+#   issues labeled needs-info            triage's question, with an Answer button
+
+on:
+  workflow_call:
+    inputs:
+      infisical-project-slug:
+        required: true
+        type: string
+        description: "The Infisical project slug that holds the feedback folder"
+      infisical-secret-path:
+        required: false
+        type: string
+        default: "/nexus-feedback"
+        description: "Infisical folder with DISCORD_BOT_TOKEN"
+      infisical-env-slug:
+        required: false
+        type: string
+        default: "prod"
+        description: "Infisical environment to read the feedback secrets from"
+      config-path:
+        required: false
+        type: string
+        default: ".github/feedback.yml"
+        description: "Path of the feedback config in the calling repo (for `branches`)"
+      staging-url:
+        required: false
+        type: string
+        default: ""
+        description: "The staging branch's deployment, linked in 'is on staging' (e.g. https://app-git-dev-team.vercel.app)"
+      production-url:
+        required: false
+        type: string
+        default: ""
+        description: "The live site, linked in 'is live' (default: the deployment's URL)"
+      workflows-ref:
+        required: false
+        type: string
+        default: "v4"
+        description: "Ref of uw-datasci/nexus-workflows to load the feedback scripts from (match the ref you call this workflow at)"
+    secrets:
+      INFISICAL_CLIENT_ID:
+        required: true
+      INFISICAL_CLIENT_SECRET:
+        required: true
+
+jobs:
+  notify:
+    name: Notify
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: read
+      pull-requests: read
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Checkout feedback scripts
+        uses: actions/checkout@v6
+        with:
+          repository: uw-datasci/nexus-workflows
+          ref: ${{ inputs.workflows-ref }}
+          path: .nexus-workflows
+          persist-credentials: false
+
+      - name: Read feedback config
+        env:
+          CONFIG_PATH: ${{ inputs.config-path }}
+        run: |
+          if [ ! -f "$CONFIG_PATH" ]; then
+            echo "::error::$CONFIG_PATH not found. Add it to opt this repo into the feedback loop (see the nexus-workflows README)."
+            exit 1
+          fi
+          mkdir -p .feedback
+          yq -o=json '.' "$CONFIG_PATH" > .feedback/config.raw.json
+
+      - name: Decide what to post
+        id: plan
+        uses: actions/github-script@v9
+        env:
+          STAGING_URL: ${{ inputs.staging-url }}
+          PRODUCTION_URL: ${{ inputs.production-url }}
+        with:
+          script: |
+            const { stepPlan } = require(`${process.env.GITHUB_WORKSPACE}/.nexus-workflows/scripts/feedback/notify.js`);
+            await stepPlan({ github, context, core });
+
+      - name: Pull secrets from Infisical
+        if: steps.plan.outputs.run == 'true'
+        uses: infisical/secrets-action@v1.0.16
+        with:
+          env-slug: ${{ inputs.infisical-env-slug }}
+          client-id: ${{ secrets.INFISICAL_CLIENT_ID }}
+          client-secret: ${{ secrets.INFISICAL_CLIENT_SECRET }}
+          project-slug: ${{ inputs.infisical-project-slug }}
+          secret-path: ${{ inputs.infisical-secret-path }}
+          export-type: file
+          file-output-path: /.feedback-secrets.env
+
+      - name: Read bot token
+        id: secrets
+        if: steps.plan.outputs.run == 'true'
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const { readSecrets } = require(`${process.env.GITHUB_WORKSPACE}/.nexus-workflows/scripts/feedback/secrets.js`);
+            readSecrets({
+              file: `${process.env.GITHUB_WORKSPACE}/.feedback-secrets.env`,
+              outputs: { "discord-bot-token": ["DISCORD_BOT_TOKEN"] },
+              core,
+            });
+
+      - name: Post to Discord
+        if: steps.plan.outputs.run == 'true'
+        uses: actions/github-script@v9
+        env:
+          DISCORD_BOT_TOKEN: ${{ steps.secrets.outputs.discord-bot-token }}
+          CHANNEL: ${{ steps.plan.outputs.channel }}
+          MESSAGE: ${{ steps.plan.outputs.message }}
+        with:
+          script: |
+            const { stepPost } = require(`${process.env.GITHUB_WORKSPACE}/.nexus-workflows/scripts/feedback/notify.js`);
+            await stepPost({ core });
+
+      - name: Remove secrets file
+        if: always()
+        run: rm -f .feedback-secrets.env

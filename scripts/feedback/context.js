@@ -12,6 +12,12 @@ const MAX_SCREENSHOTS = 10;
 const MAX_SCREENSHOT_BYTES = 5 * 1024 * 1024;
 const MAX_OPEN_ISSUES = 100;
 const ROUTE_LABELS = ["route:agent", "route:dev"];
+/** Adding it runs triage again, even on a triaged issue (the bot adds it for Answer / Still not right). */
+const RETRIAGE_LABEL = "retriage";
+const MAX_COMMENTS = 20;
+const MAX_COMMENT_CHARS = 2000;
+/** The workflows' own comments carry one of these; the agents get them elsewhere or not at all. */
+const WORKFLOW_MARKERS = ["<!-- nexus-feedback-triage -->", "<!-- nexus-feedback-fix", "<!-- nexus-feedback-mention -->"];
 const ENV_LABELS = ["env:prod", "env:staging"];
 const IMAGE_EXTENSIONS = {
   "image/png": "png",
@@ -27,6 +33,7 @@ const envLabel = (issue) => ENV_LABELS.find((name) => hasLabel(issue, name)) ?? 
 /**
  * Decide whether triage should run for this event. Issues created with labels fire both `opened`
  * and `labeled`, so only `labeled` (with the `feedback` label) counts; `opened` is skipped.
+ * Adding the `retriage` label runs it again even on a triaged issue (`retriage: true`).
  * Other events (manual or dispatched re-triage) run whenever the issue carries `feedback`.
  */
 async function gate({ github, context, owner, repo, issueNumber, retriage = false }) {
@@ -39,9 +46,11 @@ async function gate({ github, context, owner, repo, issueNumber, retriage = fals
 
   if (context.eventName === "issues" && !retriage) {
     const action = context.payload.action;
+    const label = context.payload.label?.name;
+    if (action === "labeled" && label === RETRIAGE_LABEL) return { run: true, retriage: true, reason: "", issue };
     if (action === "opened") return skip("`opened` is handled by the matching `labeled` event");
-    if (action !== "labeled" || context.payload.label?.name !== "feedback") {
-      return skip(`\`${action}\` events other than adding \`feedback\` don't trigger triage`);
+    if (action !== "labeled" || label !== "feedback") {
+      return skip(`\`${action}\` events other than adding \`feedback\` or \`${RETRIAGE_LABEL}\` don't trigger triage`);
     }
   }
 
@@ -49,7 +58,7 @@ async function gate({ github, context, owner, repo, issueNumber, retriage = fals
     return skip("the issue is already triaged");
   }
 
-  return { run: true, reason: "", issue };
+  return { run: true, retriage, reason: "", issue };
 }
 
 /** Image URLs from markdown `![..](url)` and HTML `<img src>`, in order, without duplicates. */
@@ -93,7 +102,7 @@ async function downloadImage(url, token) {
 
 /**
  * Write the agent's inputs to `dir`:
- *   issue.json, screenshots/NN.ext, open-feedback-issues.json, area-labels.json
+ *   issue.json, comments.json, screenshots/NN.ext, open-feedback-issues.json, area-labels.json
  */
 async function collectContext({ github, owner, repo, issue, dir, token, log = () => {} }) {
   fs.mkdirSync(path.join(dir, "screenshots"), { recursive: true });
@@ -115,6 +124,20 @@ async function collectContext({ github, owner, repo, issue, dir, token, log = ()
       2
     )
   );
+
+  // People's comments, oldest first: answers to triage's questions, and follow-ups organizers
+  // send from Discord ("still not right" after a merge). Untrusted, like the body.
+  const comments = (
+    await github.paginate(github.rest.issues.listComments, { owner, repo, issue_number: issue.number, per_page: 100 })
+  )
+    .filter((c) => !WORKFLOW_MARKERS.some((marker) => (c.body ?? "").includes(marker)))
+    .slice(-MAX_COMMENTS)
+    .map((c) => ({
+      author: c.user?.login ?? null,
+      created_at: c.created_at ?? null,
+      body: String(c.body ?? "").slice(0, MAX_COMMENT_CHARS),
+    }));
+  fs.writeFileSync(path.join(dir, "comments.json"), JSON.stringify(comments, null, 2));
 
   const screenshots = [];
   for (const [i, url] of extractImageUrls(issue.body).entries()) {
@@ -145,7 +168,7 @@ async function collectContext({ github, owner, repo, issue, dir, token, log = ()
   const areas = await areaLabels(github, owner, repo);
   fs.writeFileSync(path.join(dir, "area-labels.json"), JSON.stringify(areas, null, 2));
 
-  return { environment, screenshots, openIssues, areas };
+  return { environment, comments, screenshots, openIssues, areas };
 }
 
 /** The repo's `area:*` labels, without the prefix. */
@@ -170,4 +193,5 @@ module.exports = {
   envLabel,
   ROUTE_LABELS,
   ENV_LABELS,
+  RETRIAGE_LABEL,
 };

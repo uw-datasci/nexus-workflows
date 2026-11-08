@@ -8,7 +8,7 @@
 const notFound = () => Object.assign(new Error("Not Found"), { status: 404 });
 const names = (issue) => issue.labels.map((l) => (typeof l === "string" ? l : l.name));
 
-function fakeGitHub({ issues = [], labels = [], teams = {}, commits = {}, pulls = [], branches = [], runs = {}, jobs = {}, logs = {}, users = {}, permissions = {}, reviewComments = [] } = {}) {
+function fakeGitHub({ issues = [], labels = [], teams = {}, commits = {}, pulls = [], branches = [], runs = {}, jobs = {}, logs = {}, users = {}, permissions = {}, reviewComments = [], issueComments = {} } = {}) {
   const byNumber = new Map(
     issues.map((i) => [
       i.number,
@@ -16,7 +16,7 @@ function fakeGitHub({ issues = [], labels = [], teams = {}, commits = {}, pulls 
     ])
   );
   const prs = pulls.map((p) => ({ state: "open", body: "", html_url: `https://github.test/pull/${p.number}`, ...p }));
-  const comments = new Map();
+  const comments = new Map(Object.entries(issueComments).map(([n, list]) => [Number(n), list.map((c, i) => ({ id: 1000 + i, ...c }))]));
   const replies = [];
   const calls = [];
   let nextCommentId = 1;
@@ -158,6 +158,9 @@ function fakeGitHub({ issues = [], labels = [], teams = {}, commits = {}, pulls 
       },
     },
     repos: {
+      listPullRequestsAssociatedWithCommit: async ({ commit_sha }) => ({
+        data: prs.filter((p) => p.head?.sha === commit_sha || p.merge_commit_sha === commit_sha),
+      }),
       getCollaboratorPermissionLevel: async ({ username }) => {
         if (!(username in permissions)) throw notFound();
         return { data: { permission: permissions[username] } };

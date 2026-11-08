@@ -66,3 +66,44 @@ test("gate: non-issue events run for feedback issues", async () => {
 test("buildPrompt fills known placeholders and leaves the rest", () => {
   assert.equal(buildPrompt("{{A}} and {{B}} and {{lower}}", { A: 1 }), "1 and {{B}} and {{lower}}");
 });
+
+test("gate: adding `retriage` runs triage again, even on a triaged issue", async () => {
+  const triaged = fakeGitHub({ issues: [{ number: 1, labels: ["feedback", "route:agent", "retriage"] }] });
+  const result = await run(triaged, ctx("labeled", "retriage"));
+  assert.equal(result.run, true);
+  assert.equal(result.retriage, true);
+  assert.equal((await run(triaged, ctx("unlabeled", "retriage"))).run, false);
+
+  const closed = fakeGitHub({ issues: [{ number: 1, labels: ["feedback", "retriage"], state: "closed" }] });
+  assert.equal((await run(closed, ctx("labeled", "retriage"))).run, false, "reopen it first");
+});
+
+test("collectContext writes people's comments, without the workflows' own", async () => {
+  const fs = require("node:fs");
+  const os = require("node:os");
+  const path = require("node:path");
+  const { collectContext } = require("./context");
+  const issue = { number: 1, title: "t", body: "", labels: [{ name: "feedback" }], user: { login: "nexus-feedback[bot]" } };
+  const github = fakeGitHub({
+    issues: [issue],
+    issueComments: {
+      1: [
+        { body: "<!-- nexus-feedback-triage -->\n**Triage: needs more information.**", user: { login: "nexus-feedback[bot]" } },
+        { body: "**Answer from Sam** in Discord:\n\n> the apply page", user: { login: "nexus-feedback[bot]" }, created_at: "2026-11-08T17:00:00Z" },
+        { body: "<!-- nexus-feedback-fix -->\nOpened #34", user: { login: "nexus-feedback[bot]" } },
+        { body: "x".repeat(3000), user: { login: "dev" } },
+      ],
+    },
+  });
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "feedback-"));
+  const collected = await collectContext({ github, owner: "o", repo: "r", issue, dir });
+  const written = JSON.parse(fs.readFileSync(path.join(dir, "comments.json"), "utf8"));
+  assert.deepEqual(written, collected.comments);
+  assert.equal(written.length, 2);
+  assert.deepEqual(written[0], {
+    author: "nexus-feedback[bot]",
+    created_at: "2026-11-08T17:00:00Z",
+    body: "**Answer from Sam** in Discord:\n\n> the apply page",
+  });
+  assert.equal(written[1].body.length, 2000);
+});
