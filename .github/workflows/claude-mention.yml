@@ -343,6 +343,10 @@ jobs:
               core,
             });
 
+      # The app's lint and typecheck would check these scripts too.
+      - name: Move feedback scripts out of the workspace
+        run: mv .nexus-workflows "$RUNNER_TEMP/nexus-workflows"
+
       # Edits files and runs lint/typecheck only. The token can't push, and the next step turns
       # whatever it changed into a patch that the reply job checks before pushing.
       - name: Claude
@@ -361,6 +365,12 @@ jobs:
             --allowedTools '${{ steps.prepare.outputs.allowed-tools }}'
             --disallowedTools WebFetch,WebSearch,NotebookEdit
             --json-schema '${{ steps.prepare.outputs.schema }}'
+
+      - name: Put feedback scripts back
+        if: always()
+        run: |
+          rm -rf .nexus-workflows
+          mv "$RUNNER_TEMP/nexus-workflows" .nexus-workflows
 
       - name: Collect the change
         id: result
