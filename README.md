@@ -330,7 +330,7 @@ Automatically creates releases based on commit messages following [Conventional 
 When you push to `main`, the workflow automatically:
 
 - Analyzes commit messages since the last release
-- Determines the version bump (major, minor, or patch)
+- Determines the version bump (major, minor, or patch), falling back to **patch** when no commit uses a conventional type (e.g. a direct commit to `main` like `update docs`)
 - Creates and pushes a version tag (e.g., `v1.2.3`)
 - Generates release notes from commits
 - Creates a GitHub release
@@ -343,7 +343,7 @@ For situations where you need manual control:
 1. Go to **Actions** → **Release** → **Run workflow**
 2. Choose options:
    - **Release type:**
-     - `auto` - Analyze commit messages (default)
+     - `auto` - Analyze commit messages, falling back to patch (default)
      - `major` - Force major version bump (e.g., 1.0.0 → 2.0.0)
      - `minor` - Force minor version bump (e.g., 1.0.0 → 1.1.0)
      - `patch` - Force patch version bump (e.g., 1.0.0 → 1.0.1)

@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       release-type:
-        description: "Release type (auto uses commit messages, or force a specific bump)"
+        description: "Release type (auto uses commit messages, falling back to patch, or force a specific bump)"
         required: true
         default: "auto"
         type: choice
@@ -44,7 +44,7 @@ jobs:
           if [ "${{ github.event_name }}" == "workflow_dispatch" ] && [ "${{ inputs.release-type }}" != "auto" ]; then
             echo "bump=${{ inputs.release-type }}" >> $GITHUB_OUTPUT
           else
-            echo "bump=auto" >> $GITHUB_OUTPUT
+            echo "bump=patch" >> $GITHUB_OUTPUT
           fi
 
       - name: Preview Version (Dry Run)

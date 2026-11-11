@@ -1,0 +1,4 @@
+{
+  "//": "The feedback workflows check these scripts out inside the caller's workspace and require() them. Without this file Node uses the caller's package.json, and a caller with \"type\": \"module\" makes every .js here load as ESM, so require() fails.",
+  "type": "commonjs"
+}
