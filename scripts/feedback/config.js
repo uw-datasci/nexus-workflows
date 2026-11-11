@@ -103,4 +103,11 @@ function loadConfig(jsonPath) {
   return parseConfig(raw);
 }
 
-module.exports = { parseConfig, loadConfig, ConfigError };
+
+function branchFor(config, envLabel) {
+  if (envLabel === "env:prod") return config.branches.production;
+  if (envLabel === "env:staging") return config.branches.staging;
+  return null;
+}
+
+module.exports = { parseConfig, loadConfig, branchFor, ConfigError };

@@ -44,6 +44,8 @@ agent:
 `.github/workflows/feedback-triage.yml` runs when an issue gets the `feedback` label, and again whenever it gets the `retriage` label. It has two jobs:
 
 1. **Analyze.** Claude (`claude-sonnet-5-5`, read-only tools, a read-only token) reads the issue, its comments, its screenshots, `AGENTS.md`, the config and the code, and returns a verdict. The comments carry answers to triage's questions and organizers' follow-ups from Discord; the workflows' own comments are left out.
+   - **Which code:** the branch the issue's env label points at, the same branch the fix works on: `env:staging` reads `branches.staging` and `env:prod` reads `branches.production`. The config always comes from the default branch.
+   - **When it isn't there:** if what the issue describes isn't on that branch, triage asks whether the label is wrong (for example, the page is only on the live site) instead of guessing.
 2. **Apply.** A script, using the `nexus-feedback` GitHub App token, turns the verdict into labels, an assignee and a triage comment. Labels from an App token trigger other workflows; labels from `GITHUB_TOKEN` wouldn't.
 
 The verdict only *suggests* a route. The script sends the issue to the agent only when every one of these holds:
@@ -59,7 +61,7 @@ Anything else goes to `route:dev`, and the comment says which rule decided it.
 |---|---|---|
 | `route:agent` | `route:agent`, `size:*`, `area:*` | the `lead`, who reviews the agent's PR |
 | `route:dev` | `route:dev`, `size:*`, `area:*` | a `devs` override for the area; otherwise the `dev_team` member who most recently changed the likely files, skipping anyone with 3+ open feedback issues; otherwise the `lead` |
-| unclear, or no `env:prod` / `env:staging` label | `needs-info`, plus a question comment | none |
+| unclear, no `env:prod` / `env:staging` label, or not found on that env's branch | `needs-info`, plus a question comment | none |
 
 - The route label is added last, so the fix workflow finds the comment and assignee in place.
 - `area:*` values come from the repo's existing `area:*` labels.

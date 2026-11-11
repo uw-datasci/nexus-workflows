@@ -2,7 +2,7 @@
 
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { parseConfig, ConfigError } = require("./config");
+const { parseConfig, branchFor, ConfigError } = require("./config");
 
 const CXC = {
   app: "cxc",
@@ -52,4 +52,13 @@ test("reports every problem at once", () => {
 test("rejects an empty file", () => {
   assert.throws(() => parseConfig(null), ConfigError);
   assert.throws(() => parseConfig([]), ConfigError);
+});
+
+test("branchFor maps env labels to the configured branches", () => {
+  const config = parseConfig(CXC);
+  assert.equal(branchFor(config, "env:prod"), "main");
+  assert.equal(branchFor(config, "env:staging"), "dev");
+  assert.equal(branchFor(config, null), null);
+  const custom = parseConfig({ ...CXC, branches: { production: "release", staging: "next" } });
+  assert.equal(branchFor(custom, "env:staging"), "next");
 });

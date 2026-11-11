@@ -2,7 +2,10 @@
 
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { decide, renderComment, applyTriage, questionFrom, COMMENT_MARKER, VERDICT_SCHEMA } = require("./triage");
+const { decide, renderComment, applyTriage, questionFrom, checkoutFor, COMMENT_MARKER, VERDICT_SCHEMA } = require("./triage");
+const fs = require("node:fs");
+const path = require("node:path");
+const { buildPrompt } = require("./context");
 const { parseConfig } = require("./config");
 const { fakeGitHub } = require("./fake-github");
 
@@ -197,4 +200,45 @@ test("ignores duplicates that aren't open feedback issues", async () => {
   const github = fakeGitHub({ issues: [{ number: 1, labels: ["feedback"] }, { number: 7, labels: ["bug"] }], labels: LABELS, teams: { "cxc-dev": [] } });
   await apply(github, small({ duplicate_of: 7 }));
   assert.doesNotMatch(github.comments.get(1)[0].body, /duplicate/i);
+});
+
+// ─── checkoutFor ─────────────────────────────────────────────────────────────
+
+test("triage reads the branch the env label points at, the same one the fix uses", () => {
+  const staging = checkoutFor(config(), "env:staging");
+  assert.equal(staging.branch, "dev");
+  assert.match(staging.checkout, /`dev` branch, which staging runs/);
+  assert.match(staging.missingRule, /isn't on `dev`.*needs_info.*`env:staging` label should be `env:prod`/s);
+
+  const prod = checkoutFor(config(), "env:prod");
+  assert.equal(prod.branch, "main");
+  assert.match(prod.missingRule, /`env:prod` label should be `env:staging`/);
+});
+
+test("no env label: no branch to check out (triage asks for the label instead)", () => {
+  assert.deepEqual(checkoutFor(config(), null), { branch: null, checkout: "the code in this checkout", missingRule: "" });
+});
+
+test("one branch for both environments: no wrong-label question", () => {
+  const single = config({}, { branches: { production: "main", staging: "main" } });
+  assert.equal(checkoutFor(single, "env:staging").branch, "main");
+  assert.equal(checkoutFor(single, "env:staging").missingRule, "");
+});
+
+test("the triage prompt has no placeholders left once filled", () => {
+  const template = fs.readFileSync(path.join(__dirname, "triage-prompt.md"), "utf8");
+  const { checkout, missingRule } = checkoutFor(config(), "env:staging");
+  const prompt = buildPrompt(template, {
+    REPO: "uw-datasci/cxc",
+    ISSUE_NUMBER: 52,
+    CONTEXT_DIR: ".feedback",
+    CONFIG_PATH: ".github/feedback.yml",
+    CHECKOUT: checkout,
+    MISSING_RULE: missingRule,
+    MAX_FILES: 5,
+    NEVER_TOUCH: "(none)",
+    SCREENSHOTS: "none",
+  });
+  assert.doesNotMatch(prompt, /\{\{[A-Z_]+\}\}/);
+  assert.match(prompt, /`dev` branch/);
 });

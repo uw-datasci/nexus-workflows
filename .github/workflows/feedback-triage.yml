@@ -138,6 +138,14 @@ jobs:
             const { stepPrepare } = require(`${process.env.GITHUB_WORKSPACE}/.nexus-workflows/scripts/feedback/triage.js`);
             await stepPrepare({ github, context, core });
 
+      - name: Checkout the environment's branch
+        if: steps.gate.outputs.run == 'true' && steps.prepare.outputs.branch != ''
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ steps.prepare.outputs.branch }}
+          clean: false
+          persist-credentials: false
+
       # Exported to a file, not the environment, so the agent step only gets the one key it needs.
       - name: Pull secrets from Infisical
         if: steps.gate.outputs.run == 'true' && steps.prepare.outputs.environment != ''

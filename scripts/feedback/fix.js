@@ -2,7 +2,7 @@
 
 const fs = require("node:fs");
 const path = require("node:path");
-const { loadConfig, ConfigError } = require("./config");
+const { loadConfig, branchFor, ConfigError } = require("./config");
 const { pickAssignee } = require("./assign");
 const { failureExcerpt } = require("./ci-logs");
 const { collectContext, buildPrompt, labelNames, hasLabel, envLabel } = require("./context");
@@ -90,8 +90,6 @@ function issueFromBranch(branch) {
 }
 
 const retriesFrom = (body) => Number(PR_MARKER.exec(body ?? "")?.[1] ?? 0);
-
-const baseFor = (config, env) => (env === "env:prod" ? config.branches.production : config.branches.staging);
 
 /** Agent text goes into PRs and comments: one line, no pings, no hidden markup. */
 const oneLine = (text, max = 300) => safe(String(text ?? "")).replace(/\s+/g, " ").slice(0, max);
@@ -196,7 +194,7 @@ async function gateIssueEvent({ github, context, owner, repo, getConfig }) {
     mode: "fix",
     reason: "",
     issueNumber,
-    base: pr?.base.ref ?? baseFor(config, env),
+    base: pr?.base.ref ?? branchFor(config, env),
     branch,
     branchExists: Boolean(existing),
     prNumber: pr?.number ?? 0,

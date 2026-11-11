@@ -2,7 +2,7 @@
 
 const fs = require("node:fs");
 const path = require("node:path");
-const { loadConfig, ConfigError } = require("./config");
+const { loadConfig, branchFor, ConfigError } = require("./config");
 const { findMatches, normalizePath } = require("./globs");
 const { pickAssignee } = require("./assign");
 const {
@@ -59,6 +59,30 @@ const VERDICT_SCHEMA = {
   ],
   additionalProperties: false,
 };
+
+// ─── The checkout ────────────────────────────────────────────────────────────
+
+const ENV_NAMES = { "env:prod": "production (the live site)", "env:staging": "staging" };
+
+/**
+ * The branch triage reads and what its prompt says about it. The issue's env label picks the
+ * branch, the same one the fix works on, so triage never routes a change the fix can't find.
+ * When the two branches differ, something missing from this branch most likely means the label
+ * is wrong, so triage asks instead of guessing.
+ */
+function checkoutFor(config, environment) {
+  const branch = branchFor(config, environment);
+  if (!branch) return { branch: null, checkout: "the code in this checkout", missingRule: "" };
+
+  const other = environment === "env:prod" ? "env:staging" : "env:prod";
+  const otherBranch = branchFor(config, other);
+  const checkout = `the code in this checkout: the \`${branch}\` branch, which ${ENV_NAMES[environment]} runs (the issue is labelled \`${environment}\`). A fix would be made on this branch`;
+  const missingRule =
+    otherBranch === branch
+      ? ""
+      : `\n   If what the issue describes (the page, component or text) isn't on \`${branch}\`, don't guess and don't route it: return \`decision: "needs_info"\` and ask whether they saw it on ${ENV_NAMES[other]}, for example "I can't find this on ${ENV_NAMES[environment]}. If you saw it on ${ENV_NAMES[other]}, the issue's \`${environment}\` label should be \`${other}\`."`;
+  return { branch, checkout, missingRule };
+}
 
 // ─── Deciding ────────────────────────────────────────────────────────────────
 
@@ -373,12 +397,15 @@ async function stepPrepare({ github, context, core }) {
     log: (message) => core.warning(message),
   });
 
+  const { branch, checkout, missingRule } = checkoutFor(config, collected.environment);
   const template = fs.readFileSync(path.join(__dirname, "triage-prompt.md"), "utf8");
   const prompt = buildPrompt(template, {
     REPO: `${owner}/${repo}`,
     ISSUE_NUMBER: issueNumber,
     CONTEXT_DIR,
     CONFIG_PATH: configPath,
+    CHECKOUT: checkout,
+    MISSING_RULE: missingRule,
     MAX_FILES: config.agent.max_files,
     NEVER_TOUCH: config.agent.never_touch.length ? config.agent.never_touch.map(code).join(", ") : "(none)",
     SCREENSHOTS: collected.screenshots.length
@@ -388,6 +415,8 @@ async function stepPrepare({ github, context, core }) {
 
   core.setOutput("config", JSON.stringify(config));
   core.setOutput("environment", collected.environment ?? "");
+  // The workflow checks this branch out before the agent runs (empty: no env label, no agent).
+  core.setOutput("branch", branch ?? "");
   core.setOutput("prompt", prompt);
   core.setOutput("schema", JSON.stringify(VERDICT_SCHEMA));
 }
@@ -443,6 +472,7 @@ module.exports = {
   VERDICT_SCHEMA,
   MISSING_ENV_QUESTION,
   COMMENT_MARKER,
+  checkoutFor,
   decide,
   renderComment,
   questionFrom,
