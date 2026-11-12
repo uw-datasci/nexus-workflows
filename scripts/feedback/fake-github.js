@@ -8,11 +8,11 @@
 const notFound = () => Object.assign(new Error("Not Found"), { status: 404 });
 const names = (issue) => issue.labels.map((l) => (typeof l === "string" ? l : l.name));
 
-function fakeGitHub({ issues = [], labels = [], teams = {}, commits = {}, pulls = [], branches = [], runs = {}, jobs = {}, logs = {}, users = {}, permissions = {}, reviewComments = [], issueComments = {} } = {}) {
+function fakeGitHub({ issues = [], labels = [], teams = {}, commits = {}, pulls = [], branches = [], runs = {}, jobs = {}, logs = {}, users = {}, permissions = {}, reviewComments = [], issueComments = {}, project = null } = {}) {
   const byNumber = new Map(
     issues.map((i) => [
       i.number,
-      { state: "open", body: "", assignees: [], user: { login: "someone" }, html_url: `https://github.test/${i.number}`, ...i, labels: (i.labels ?? []).map((name) => ({ name })) },
+      { state: "open", body: "", assignees: [], user: { login: "someone" }, html_url: `https://github.test/${i.number}`, node_id: `I_${i.number}`, ...i, labels: (i.labels ?? []).map((name) => ({ name })) },
     ])
   );
   const prs = pulls.map((p) => ({ state: "open", body: "", html_url: `https://github.test/pull/${p.number}`, ...p }));
@@ -176,7 +176,29 @@ function fakeGitHub({ issues = [], labels = [], teams = {}, commits = {}, pulls 
 
   const paginate = async (fn, params) => (await fn(params)).data;
 
-  return { rest, paginate, calls, comments, replies, issue, prs };
+  // Org project boards: `project` is { number, field = "Status", options: [status names] }.
+  const statuses = new Map();
+  const graphql = async (query, vars) => {
+    if (query.includes("projectV2(number")) {
+      if (!project || vars.number !== project.number) return { organization: { projectV2: null } };
+      const field =
+        vars.field === (project.field ?? "Status")
+          ? { id: "F", options: project.options.map((name, n) => ({ id: `O${n}`, name })) }
+          : null;
+      return { organization: { projectV2: { id: "P", field } } };
+    }
+    if (query.includes("addProjectV2ItemById")) return { addProjectV2ItemById: { item: { id: vars.contentId } } };
+    if (query.includes("updateProjectV2ItemFieldValue")) {
+      const status = project.options[Number(vars.optionId.slice(1))];
+      calls.push(["setStatus", vars.itemId, status]);
+      statuses.set(vars.itemId, status);
+      return { updateProjectV2ItemFieldValue: { projectV2Item: { id: vars.itemId } } };
+    }
+    throw new Error(`fake graphql: unexpected query ${query}`);
+  };
+  const projectStatus = (n) => statuses.get(`I_${n}`) ?? null;
+
+  return { rest, paginate, graphql, calls, comments, replies, issue, prs, projectStatus };
 }
 
 module.exports = { fakeGitHub };

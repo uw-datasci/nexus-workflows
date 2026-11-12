@@ -533,6 +533,7 @@ jobs:
           permission-contents: read
           permission-pull-requests: read
           permission-members: read
+          permission-organization-projects: ${{ fromJSON(needs.gate.outputs.config || '{}').project && 'write' || '' }}
 
       - name: Hand off to a developer
         uses: actions/github-script@v9

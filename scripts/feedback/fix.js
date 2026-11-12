@@ -4,6 +4,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { loadConfig, branchFor, ConfigError } = require("./config");
 const { pickAssignee } = require("./assign");
+const { setProjectStatus } = require("./project");
 const { failureExcerpt } = require("./ci-logs");
 const { collectContext, buildPrompt, labelNames, hasLabel, envLabel } = require("./context");
 const { COMMENT_MARKER: TRIAGE_MARKER, safe, code, upsertComment, removeLabel, addLabels } = require("./triage");
@@ -420,7 +421,8 @@ async function handoff({ github, owner, repo, issueNumber, config, mode, reasons
 
   if (hasLabel(issue, "route:agent")) await removeLabel(github, owner, repo, issueNumber, "route:agent");
   if (!hasLabel(issue, "route:dev")) await addLabels(github, owner, repo, issueNumber, ["route:dev"]);
-  return { assignee, prNumber };
+  const status = await setProjectStatus({ github, owner, issue, config, key: "dev", log });
+  return { assignee, prNumber, status };
 }
 
 // ─── Workflow steps ──────────────────────────────────────────────────────────

@@ -54,6 +54,24 @@ test("rejects an empty file", () => {
   assert.throws(() => parseConfig([]), ConfigError);
 });
 
+test("project defaults to the Status field and the board's usual columns", () => {
+  assert.equal(parseConfig({ app: "x", lead: "l" }).project, null);
+  assert.deepEqual(parseConfig({ app: "x", lead: "l", project: { number: 28 } }).project, {
+    number: 28,
+    field: "Status",
+    statuses: { backlog: "Backlog", agent: "In Progress", dev: "Todo" },
+  });
+  const custom = parseConfig({ app: "x", lead: "l", project: { number: 3, field: "Stage", statuses: { dev: "Ready" } } });
+  assert.deepEqual(custom.project.statuses, { backlog: "Backlog", agent: "In Progress", dev: "Ready" });
+});
+
+test("project problems are reported", () => {
+  assert.throws(
+    () => parseConfig({ app: "x", lead: "l", project: { number: "28", statuses: { done: "Done", dev: "" } } }),
+    (error) => error.problems.length === 3
+  );
+});
+
 test("branchFor maps env labels to the configured branches", () => {
   const config = parseConfig(CXC);
   assert.equal(branchFor(config, "env:prod"), "main");

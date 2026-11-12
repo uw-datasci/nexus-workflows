@@ -12,6 +12,7 @@ const fs = require("node:fs");
  *   dev_team: cxc-dev           # empty = every dev issue goes to the lead
  *   devs: [{ github: <handle>, areas: [landing, auth] }]
  *   agent: { enabled: true, max_files: 5, never_touch: [...] }
+ *   project: { number: 28, field: Status, statuses: { backlog: Backlog, agent: In Progress, dev: Todo } }
  */
 
 class ConfigError extends Error {
@@ -21,6 +22,8 @@ class ConfigError extends Error {
     this.problems = problems;
   }
 }
+
+const PROJECT_STATUSES = { backlog: "Backlog", agent: "In Progress", dev: "Todo" };
 
 const handle = (value) => String(value).trim().replace(/^@/, "");
 const isNonEmptyString = (value) => typeof value === "string" && value.trim() !== "";
@@ -67,6 +70,25 @@ function parseConfig(raw) {
   }
   if (!Array.isArray(agent.never_touch)) problems.push("`agent.never_touch` must be a list");
 
+  let project = null;
+  if (raw.project != null) {
+    const { number, field = "Status", statuses = {} } = raw.project;
+    if (!Number.isInteger(number) || number < 1) problems.push("`project.number` must be the org project's number");
+    if (!isNonEmptyString(field)) problems.push("`project.field` must be a field name");
+    if (!statuses || typeof statuses !== "object" || Array.isArray(statuses)) {
+      problems.push("`project.statuses` must map backlog, agent and dev to status names");
+    } else {
+      for (const key of Object.keys(statuses)) {
+        if (!(key in PROJECT_STATUSES)) problems.push(`\`project.statuses.${key}\` isn't one of backlog, agent, dev`);
+        else if (!isNonEmptyString(statuses[key])) problems.push(`\`project.statuses.${key}\` must be a status name`);
+      }
+      project = { number, field: String(field).trim(), statuses: { ...PROJECT_STATUSES } };
+      for (const key of Object.keys(PROJECT_STATUSES)) {
+        if (isNonEmptyString(statuses[key])) project.statuses[key] = statuses[key].trim();
+      }
+    }
+  }
+
   if (problems.length > 0) throw new ConfigError(problems);
 
   return {
@@ -84,6 +106,7 @@ function parseConfig(raw) {
       max_files: agent.max_files,
       never_touch: agent.never_touch.map(String),
     },
+    project,
   };
 }
 

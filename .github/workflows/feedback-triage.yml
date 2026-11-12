@@ -259,6 +259,7 @@ jobs:
           permission-issues: write
           permission-contents: read
           permission-members: read
+          permission-organization-projects: ${{ fromJSON(needs.analyze.outputs.config || '{}').project && 'write' || '' }}
 
       - name: Apply triage
         uses: actions/github-script@v9

@@ -5,6 +5,7 @@ const path = require("node:path");
 const { loadConfig, branchFor, ConfigError } = require("./config");
 const { findMatches, normalizePath } = require("./globs");
 const { pickAssignee } = require("./assign");
+const { setProjectStatus } = require("./project");
 const {
   gate,
   collectContext,
@@ -301,7 +302,8 @@ async function applyTriage({ github, owner, repo, issueNumber, verdict, config, 
   if (outcome.kind === "needs_info") {
     await addLabels(github, owner, repo, issueNumber, ["needs-info"]);
     await upsertComment(github, owner, repo, issueNumber, renderComment(outcome));
-    return { outcome };
+    const status = await setProjectStatus({ github, owner, issue, config, key: "backlog", log });
+    return { outcome, status };
   }
 
   const assignee = await pickAssignee({
@@ -342,8 +344,9 @@ async function applyTriage({ github, owner, repo, issueNumber, verdict, config, 
     return { outcome, assignee, duplicate };
   }
 
+  const status = await setProjectStatus({ github, owner, issue, config, key: outcome.route, log });
   if (!current.includes(keepRoute) || restartRoute) await addLabels(github, owner, repo, issueNumber, [keepRoute]);
-  return { outcome, assignee, duplicate };
+  return { outcome, assignee, duplicate, status };
 }
 
 // ─── Workflow steps ──────────────────────────────────────────────────────────

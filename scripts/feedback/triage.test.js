@@ -137,6 +137,45 @@ test("needs_info adds the label and a question, nothing else", async () => {
   assert.deepEqual(github.issue(1).assignees, []);
 });
 
+const BOARD = { number: 28, options: ["Backlog", "Todo", "In Progress", "Done"] };
+const withBoard = () => ({ config: config({}, { project: { number: 28 } }) });
+
+test("the board's status follows the route: agent In Progress, dev Todo, a question Backlog", async () => {
+  const toAgent = fakeGitHub({ issues: [{ number: 1, labels: ["feedback", "env:staging"] }], labels: LABELS, project: BOARD });
+  assert.equal((await apply(toAgent, small(), withBoard())).status, "In Progress");
+  assert.equal(toAgent.projectStatus(1), "In Progress");
+  const order = toAgent.calls.map((c) => c[0]);
+  assert.ok(order.indexOf("setStatus") < order.lastIndexOf("addLabels"), "status is set before route:agent starts the fix");
+
+  const toDev = fakeGitHub({ issues: [{ number: 1, labels: ["feedback", "env:staging"] }], labels: LABELS, project: BOARD });
+  await apply(toDev, small({ route: "dev", size: "l" }), withBoard());
+  assert.equal(toDev.projectStatus(1), "Todo");
+
+  const question = fakeGitHub({ issues: [{ number: 1, labels: ["feedback", "route:agent"] }], labels: LABELS, project: BOARD });
+  await apply(question, { decision: "needs_info", question: "Which page?" }, { ...withBoard(), retriage: true });
+  assert.equal(question.projectStatus(1), "Backlog");
+});
+
+test("no project configured: the board is left alone", async () => {
+  const github = fakeGitHub({ issues: [{ number: 1, labels: ["feedback", "env:staging"] }], labels: LABELS, project: BOARD });
+  assert.equal((await apply(github, small())).status, null);
+  assert.equal(github.projectStatus(1), null);
+});
+
+test("a board problem is logged and triage still finishes", async () => {
+  const github = fakeGitHub({ issues: [{ number: 1, labels: ["feedback", "env:staging"] }], labels: LABELS, project: { number: 28, options: ["Backlog", "Doing"] } });
+  const logs = [];
+  const result = await apply(github, small(), { ...withBoard(), log: (m) => logs.push(m) });
+  assert.equal(result.status, null);
+  assert.match(logs.join("\n"), /Could not set Status to "In Progress" on project #28: "Status" has no "In Progress" option/);
+  assert.ok(labelsOf(github).includes("route:agent"));
+
+  const missing = fakeGitHub({ issues: [{ number: 1, labels: ["feedback", "env:staging"] }], labels: LABELS });
+  const missingLogs = [];
+  await apply(missing, small(), { ...withBoard(), log: (m) => missingLogs.push(m) });
+  assert.match(missingLogs.join("\n"), /no project #28 in o/);
+});
+
 test("does nothing to an issue that's already triaged", async () => {
   const github = fakeGitHub({ issues: [{ number: 1, labels: ["feedback", "route:dev"] }], labels: LABELS });
   const result = await apply(github, small());

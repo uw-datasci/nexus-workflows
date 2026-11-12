@@ -426,6 +426,17 @@ test("hand-off assigns the developer who last changed the files, then swaps the 
   assert.ok(order.indexOf("createComment") < order.indexOf("addLabels"), "labels change last");
 });
 
+test("hand-off moves the issue to Todo on the board", async () => {
+  const github = fakeGitHub({
+    issues: [issue(["feedback", "env:staging", "route:agent"])],
+    teams: { "cxc-dev": [] },
+    project: { number: 28, options: ["Backlog", "Todo", "In Progress"] },
+  });
+  const result = await handoffWith(github, { config: parseConfig({ app: "cxc", lead: "lead", dev_team: "cxc-dev", project: { number: 28 } }) });
+  assert.equal(result.status, "Todo");
+  assert.equal(github.projectStatus(1), "Todo");
+});
+
 test("hand-off falls back to the triage comment's likely files and mentions an open PR", async () => {
   const github = fakeGitHub({
     issues: [issue(["feedback", "env:staging", "route:agent"])],
