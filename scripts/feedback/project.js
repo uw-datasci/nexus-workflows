@@ -2,8 +2,8 @@
 
 /**
  * The issue's status on the org project in `project:` (feedback.yml): backlog while it waits for
- * an answer, agent once route:agent is set, dev once a developer has it. Needs the App's
- * organization Projects: read and write permission.
+ * an answer, agent once route:agent is set, review once the agent's PR is open, dev once a
+ * developer has it. Needs the App's organization Projects: read and write permission.
  */
 
 const FIELD_QUERY = `

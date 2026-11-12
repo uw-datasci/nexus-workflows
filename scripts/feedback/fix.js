@@ -357,7 +357,8 @@ async function publish({ github, owner, repo, cwd, plan, patchFile, agent, confi
     ].join("\n"),
     FIX_MARKER
   );
-  return { pr: { number: pr.number, url: pr.html_url, created }, files: pushed.files };
+  const status = await setProjectStatus({ github, owner, issue, config, key: "review", log });
+  return { pr: { number: pr.number, url: pr.html_url, created }, files: pushed.files, status };
 }
 
 // ─── Hand-off ────────────────────────────────────────────────────────────────

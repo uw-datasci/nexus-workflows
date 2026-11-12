@@ -12,7 +12,7 @@ const fs = require("node:fs");
  *   dev_team: cxc-dev           # empty = every dev issue goes to the lead
  *   devs: [{ github: <handle>, areas: [landing, auth] }]
  *   agent: { enabled: true, max_files: 5, never_touch: [...] }
- *   project: { number: 28, field: Status, statuses: { backlog: Backlog, agent: In Progress, dev: Todo } }
+ *   project: { number: 28, field: Status, statuses: { backlog: Backlog, agent: In Progress, review: In Review, dev: Todo } }
  */
 
 class ConfigError extends Error {
@@ -23,7 +23,7 @@ class ConfigError extends Error {
   }
 }
 
-const PROJECT_STATUSES = { backlog: "Backlog", agent: "In Progress", dev: "Todo" };
+const PROJECT_STATUSES = { backlog: "Backlog", agent: "In Progress", review: "In Review", dev: "Todo" };
 
 const handle = (value) => String(value).trim().replace(/^@/, "");
 const isNonEmptyString = (value) => typeof value === "string" && value.trim() !== "";
@@ -76,10 +76,10 @@ function parseConfig(raw) {
     if (!Number.isInteger(number) || number < 1) problems.push("`project.number` must be the org project's number");
     if (!isNonEmptyString(field)) problems.push("`project.field` must be a field name");
     if (!statuses || typeof statuses !== "object" || Array.isArray(statuses)) {
-      problems.push("`project.statuses` must map backlog, agent and dev to status names");
+      problems.push("`project.statuses` must map backlog, agent, review and dev to status names");
     } else {
       for (const key of Object.keys(statuses)) {
-        if (!(key in PROJECT_STATUSES)) problems.push(`\`project.statuses.${key}\` isn't one of backlog, agent, dev`);
+        if (!(key in PROJECT_STATUSES)) problems.push(`\`project.statuses.${key}\` isn't one of backlog, agent, review, dev`);
         else if (!isNonEmptyString(statuses[key])) problems.push(`\`project.statuses.${key}\` must be a status name`);
       }
       project = { number, field: String(field).trim(), statuses: { ...PROJECT_STATUSES } };

@@ -59,10 +59,10 @@ test("project defaults to the Status field and the board's usual columns", () =>
   assert.deepEqual(parseConfig({ app: "x", lead: "l", project: { number: 28 } }).project, {
     number: 28,
     field: "Status",
-    statuses: { backlog: "Backlog", agent: "In Progress", dev: "Todo" },
+    statuses: { backlog: "Backlog", agent: "In Progress", review: "In Review", dev: "Todo" },
   });
   const custom = parseConfig({ app: "x", lead: "l", project: { number: 3, field: "Stage", statuses: { dev: "Ready" } } });
-  assert.deepEqual(custom.project.statuses, { backlog: "Backlog", agent: "In Progress", dev: "Ready" });
+  assert.deepEqual(custom.project.statuses, { backlog: "Backlog", agent: "In Progress", review: "In Review", dev: "Ready" });
 });
 
 test("project problems are reported", () => {

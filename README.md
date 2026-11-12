@@ -41,6 +41,7 @@ project:                  # optional: keep the issue's status on an org project 
   statuses:               # defaults shown
     backlog: Backlog
     agent: In Progress
+    review: In Review
     dev: Todo
 ```
 
@@ -70,7 +71,7 @@ Anything else goes to `route:dev`, and the comment says which rule decided it.
 | `route:dev` | `route:dev`, `size:*`, `area:*` | a `devs` override for the area; otherwise the `dev_team` member who most recently changed the likely files, skipping anyone with 3+ open feedback issues; otherwise the `lead` |
 | unclear, no `env:prod` / `env:staging` label, or not found on that env's branch | `needs-info`, plus a question comment | none |
 
-**Project board (optional).** With `project:` set, the apply step adds the issue to that org project and sets its status: `agent` (In Progress) for `route:agent`, `dev` (Todo) for `route:dev`, and `backlog` (Backlog) for a question. Feedback Fix sets `dev` when it hands an issue to a developer. A missing board, field or status is a warning, and triage still finishes.
+**Project board (optional).** With `project:` set, the apply step adds the issue to that org project and sets its status: `agent` (In Progress) for `route:agent`, `dev` (Todo) for `route:dev`, and `backlog` (Backlog) for a question. Feedback Fix sets `review` (In Review) when the agent's PR is opened or updated, and `dev` when it hands an issue to a developer. A missing board, field or status is a warning, and triage still finishes.
 
 - The `nexus-feedback` App needs the organization permission **Projects: Read and write**. Grant it before adding `project:`, since the token asks for it once `project:` is set.
 - For Backlog as soon as the issue is created, turn on the board's built-in **Item added to project** workflow with Status: Backlog, and have **Auto-add to project** add `is:issue` items.

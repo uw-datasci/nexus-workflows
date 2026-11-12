@@ -324,6 +324,21 @@ test("publish pushes the branch, opens the PR and reports it on the issue", asyn
   assert.match(github.comments.get(1)[0].body, new RegExp(`^${FIX_MARKER}\\n\\*\\*Agent PR opened:\\*\\* #100`));
 });
 
+test("an opened agent PR moves the issue to In Review on the board", async () => {
+  const repo = makeRepo(FILES);
+  const patchFile = repo.patch({ "components/footer.ts": "2026\n" });
+  const github = fakeGitHub({
+    issues: [issue(["feedback", "env:staging", "route:agent"])],
+    project: { number: 28, options: ["Backlog", "Todo", "In Progress", "In Review"] },
+  });
+  const cfg = parseConfig({ app: "cxc", lead: "lead", dev_team: "cxc-dev", project: { number: 28 } });
+
+  const result = await publishWith({ repo, github, patchFile, cfg });
+
+  assert.equal(result.status, "In Review");
+  assert.equal(github.projectStatus(1), "In Review");
+});
+
 test("a change that breaks the rules is never pushed", async () => {
   const repo = makeRepo(FILES);
   const patchFile = repo.patch({ "components/footer.ts": "2026\n", "proxy.ts": "changed\n" });
